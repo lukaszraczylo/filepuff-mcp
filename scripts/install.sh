@@ -59,6 +59,13 @@ detect_platform() {
             ;;
     esac
 
+    # Warn about unsupported combinations
+    if [ "$os" = "linux" ] && [ "$arch" = "arm64" ]; then
+        print_error "Linux ARM64 builds are not currently available due to CGO cross-compilation complexity"
+        print_error "Please build from source: https://github.com/lukaszraczylo/filepuff-mcp#build-from-source"
+        exit 1
+    fi
+
     echo "${os}_${arch}"
 }
 
