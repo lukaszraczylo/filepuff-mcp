@@ -14,32 +14,48 @@ A Go-based MCP (Model Context Protocol) server for Claude Code providing intelli
 
 ## Installation
 
-### Binary Releases (Recommended)
+### Quick Install (Recommended)
+
+Install the latest version with a single command:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/lukaszraczylo/filepuff-mcp/main/scripts/install.sh | bash
+```
+
+This script will:
+- Automatically detect your platform (OS and architecture)
+- Download the latest release
+- Verify checksums
+- Install to `~/.local/bin` (or `/usr/local/bin` if needed)
+- Make the binary executable
+
+### Manual Installation
 
 Download pre-built binaries from the [releases page](https://github.com/lukaszraczylo/filepuff-mcp/releases):
 
 ```bash
 # macOS (ARM64)
-curl -L https://github.com/lukaszraczylo/filepuff-mcp/releases/latest/download/mcp-filepuff-darwin-arm64.tar.gz | tar xz
-sudo mv mcp-filepuff /usr/local/bin/
+curl -L https://github.com/lukaszraczylo/filepuff-mcp/releases/latest/download/mcp-filepuff_<version>_darwin_arm64.tar.gz | tar xz
+mv mcp-filepuff ~/.local/bin/
 
 # macOS (AMD64)
-curl -L https://github.com/lukaszraczylo/filepuff-mcp/releases/latest/download/mcp-filepuff-darwin-amd64.tar.gz | tar xz
-sudo mv mcp-filepuff /usr/local/bin/
+curl -L https://github.com/lukaszraczylo/filepuff-mcp/releases/latest/download/mcp-filepuff_<version>_darwin_amd64.tar.gz | tar xz
+mv mcp-filepuff ~/.local/bin/
 
 # Linux (ARM64)
-curl -L https://github.com/lukaszraczylo/filepuff-mcp/releases/latest/download/mcp-filepuff-linux-arm64.tar.gz | tar xz
-sudo mv mcp-filepuff /usr/local/bin/
+curl -L https://github.com/lukaszraczylo/filepuff-mcp/releases/latest/download/mcp-filepuff_<version>_linux_arm64.tar.gz | tar xz
+mv mcp-filepuff ~/.local/bin/
 
 # Linux (AMD64)
-curl -L https://github.com/lukaszraczylo/filepuff-mcp/releases/latest/download/mcp-filepuff-linux-amd64.tar.gz | tar xz
-sudo mv mcp-filepuff /usr/local/bin/
+curl -L https://github.com/lukaszraczylo/filepuff-mcp/releases/latest/download/mcp-filepuff_<version>_linux_amd64.tar.gz | tar xz
+mv mcp-filepuff ~/.local/bin/
 
 # Windows (PowerShell)
-Invoke-WebRequest -Uri "https://github.com/lukaszraczylo/filepuff-mcp/releases/latest/download/mcp-filepuff-windows-amd64.zip" -OutFile mcp-filepuff.zip
-Expand-Archive mcp-filepuff.zip -DestinationPath .
-Move-Item mcp-filepuff.exe C:\Windows\System32\
+Invoke-WebRequest -Uri "https://github.com/lukaszraczylo/filepuff-mcp/releases/latest/download/mcp-filepuff_<version>_windows_amd64.zip" -OutFile mcp-filepuff.zip
+Expand-Archive mcp-filepuff.zip -DestinationPath $env:USERPROFILE\.local\bin
 ```
+
+Replace `<version>` with the actual version (e.g., `v1.0.0`).
 
 ### Prerequisites
 
