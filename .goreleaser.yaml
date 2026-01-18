@@ -93,7 +93,7 @@ dockers_v2:
       - linux/amd64
       - linux/arm64
     dockerfile: Dockerfile.goreleaser
-    build_flag_templates:
+    build_flags:
       - "--pull"
       - "--label=org.opencontainers.image.created={{.Date}}"
       - "--label=org.opencontainers.image.title={{.ProjectName}}"
