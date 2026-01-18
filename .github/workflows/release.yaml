@@ -1,0 +1,27 @@
+name: Test, build, release
+
+on:
+  workflow_dispatch:
+  push:
+    paths-ignore:
+      - '**.md'
+      - '**/release.yaml'
+    branches:
+      - main
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  id-token: write
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    uses: lukaszraczylo/shared-actions/.github/workflows/go-release.yaml@main
+    with:
+      go-version: "1.24"
+      docker-enabled: false
+      rolling-release-tag: "v1"
+    secrets: inherit

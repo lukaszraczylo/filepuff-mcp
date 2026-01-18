@@ -1,0 +1,326 @@
+package search
+
+import (
+	"bytes"
+	"context"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/lukaszraczylo/mcp-filepuff/internal/config"
+)
+
+func TestNew(t *testing.T) {
+	cfg := config.Default()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+
+	searcher, err := New(cfg, logger)
+	if err != nil {
+		// ripgrep might not be installed
+		if strings.Contains(err.Error(), "not found") {
+			t.Skip("ripgrep not installed, skipping test")
+		}
+		t.Fatalf("New failed: %v", err)
+	}
+
+	if searcher == nil {
+		t.Fatal("expected non-nil searcher")
+	}
+}
+
+func TestBuildArgs(t *testing.T) {
+	cfg := config.Default()
+	cfg.WorkspaceRoot = "/test/workspace"
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+
+	// Create searcher without checking for rg binary
+	s := &Searcher{
+		cfg:    cfg,
+		logger: logger,
+		rgPath: "/usr/bin/rg",
+	}
+
+	tests := []struct {
+		name     string
+		req      *Request
+		expected []string
+	}{
+		{
+			name: "basic search",
+			req: &Request{
+				Pattern:      "test",
+				ContextLines: 2,
+				Regex:        true,
+			},
+			expected: []string{"--json", "--context=2", "--", "test", "."},
+		},
+		{
+			name: "ignore case",
+			req: &Request{
+				Pattern:    "test",
+				IgnoreCase: true,
+				Regex:      true,
+			},
+			expected: []string{"--json", "--ignore-case", "--", "test", "."},
+		},
+		{
+			name: "fixed strings",
+			req: &Request{
+				Pattern: "test",
+				Regex:   false,
+			},
+			expected: []string{"--json", "--fixed-strings", "--", "test", "."},
+		},
+		{
+			name: "with file types",
+			req: &Request{
+				Pattern:   "test",
+				FileTypes: []string{"go", "ts"},
+				Regex:     true,
+			},
+			expected: []string{"--json", "--type", "go", "--type", "ts", "--", "test", "."},
+		},
+		{
+			name: "with max results",
+			req: &Request{
+				Pattern:    "test",
+				MaxResults: 10,
+				Regex:      true,
+			},
+			expected: []string{"--json", "--max-count=10", "--", "test", "."},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args := s.buildArgs(tt.req)
+
+			// Check that all expected args are present
+			for _, exp := range tt.expected {
+				found := false
+				for _, arg := range args {
+					if arg == exp {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("expected arg %q not found in %v", exp, args)
+				}
+			}
+		})
+	}
+}
+
+func TestFormatResults(t *testing.T) {
+	cfg := config.Default()
+	cfg.WorkspaceRoot = "/test/workspace"
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+
+	s := &Searcher{
+		cfg:    cfg,
+		logger: logger,
+		rgPath: "/usr/bin/rg",
+	}
+
+	tests := []struct {
+		name     string
+		results  *SearchResults
+		contains []string
+	}{
+		{
+			name: "empty results",
+			results: &SearchResults{
+				Results: []Result{},
+			},
+			contains: []string{"No matches found"},
+		},
+		{
+			name: "single result",
+			results: &SearchResults{
+				Results: []Result{
+					{
+						File:      "test.go",
+						Line:      10,
+						Column:    5,
+						MatchText: "func TestSomething()",
+					},
+				},
+				Total: 1,
+			},
+			contains: []string{"test.go", "L10", "TestSomething"},
+		},
+		{
+			name: "truncated results",
+			results: &SearchResults{
+				Results: []Result{
+					{
+						File:      "test.go",
+						Line:      10,
+						MatchText: "match",
+					},
+				},
+				Truncated: true,
+				Total:     100,
+			},
+			contains: []string{"truncated", "100"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			output := s.FormatResults(tt.results)
+
+			for _, exp := range tt.contains {
+				if !strings.Contains(output, exp) {
+					t.Errorf("expected output to contain %q, got:\n%s", exp, output)
+				}
+			}
+		})
+	}
+}
+
+func TestParseOutput(t *testing.T) {
+	cfg := config.Default()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+
+	s := &Searcher{
+		cfg:    cfg,
+		logger: logger,
+		rgPath: "/usr/bin/rg",
+	}
+
+	// Sample ripgrep JSON output
+	jsonOutput := `{"type":"begin","data":{"path":{"text":"test.go"}}}
+{"type":"match","data":{"path":{"text":"test.go"},"lines":{"text":"func TestSomething() {\n"},"line_number":10,"absolute_offset":100,"submatches":[{"match":{"text":"Test"},"start":5,"end":9}]}}
+{"type":"end","data":{"path":{"text":"test.go"},"stats":{"bytes_searched":1000}}}
+{"type":"summary","data":{"elapsed_total":{"secs":0,"nanos":1000000},"stats":{"searches":1,"searches_with_match":1,"bytes_searched":1000,"bytes_printed":100,"matched_lines":1,"matches":1}}}
+`
+	buf := bytes.NewBufferString(jsonOutput)
+
+	results, err := s.parseOutput(buf, 0)
+	if err != nil {
+		t.Fatalf("parseOutput failed: %v", err)
+	}
+
+	if len(results.Results) != 1 {
+		t.Errorf("expected 1 result, got %d", len(results.Results))
+	}
+
+	if results.Results[0].File != "test.go" {
+		t.Errorf("expected file 'test.go', got %q", results.Results[0].File)
+	}
+
+	if results.Results[0].Line != 10 {
+		t.Errorf("expected line 10, got %d", results.Results[0].Line)
+	}
+
+	if results.Results[0].Column != 6 { // 1-indexed
+		t.Errorf("expected column 6, got %d", results.Results[0].Column)
+	}
+}
+
+func TestTruncateLine(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+		maxLen   int
+	}{
+		{
+			input:    "short",
+			maxLen:   10,
+			expected: "short",
+		},
+		{
+			input:    "this is a very long line that should be truncated",
+			maxLen:   20,
+			expected: "this is a very lo...",
+		},
+		{
+			input:    "exact",
+			maxLen:   5,
+			expected: "exact",
+		},
+	}
+
+	for _, tt := range tests {
+		result := truncateLine(tt.input, tt.maxLen)
+		if result != tt.expected {
+			t.Errorf("truncateLine(%q, %d) = %q, want %q", tt.input, tt.maxLen, result, tt.expected)
+		}
+	}
+}
+
+func TestSearchIntegration(t *testing.T) {
+	// Create a temporary directory with test files
+	tmpDir, err := os.MkdirTemp("", "mcp-filepuff-search-test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create test files
+	testFile := filepath.Join(tmpDir, "test.go")
+	content := `package main
+
+func main() {
+	println("Hello, World!")
+}
+`
+	err = os.WriteFile(testFile, []byte(content), 0600)
+	if err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.WorkspaceRoot = tmpDir
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+
+	searcher, err := New(cfg, logger)
+	if err != nil {
+		t.Skip("ripgrep not installed, skipping integration test")
+	}
+
+	ctx := context.Background()
+	req := &Request{
+		Pattern:      "Hello",
+		ContextLines: 1,
+		Regex:        false,
+	}
+
+	results, err := searcher.Search(ctx, req)
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+
+	if len(results.Results) != 1 {
+		t.Errorf("expected 1 result, got %d", len(results.Results))
+	}
+
+	if len(results.Results) > 0 && !strings.Contains(results.Results[0].MatchText, "Hello") {
+		t.Errorf("expected match to contain 'Hello', got %q", results.Results[0].MatchText)
+	}
+}
+
+func TestSearchEmptyPattern(t *testing.T) {
+	cfg := config.Default()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+
+	s := &Searcher{
+		cfg:    cfg,
+		logger: logger,
+		rgPath: "/usr/bin/rg",
+	}
+
+	ctx := context.Background()
+	req := &Request{
+		Pattern: "",
+	}
+
+	_, err := s.Search(ctx, req)
+	if err == nil {
+		t.Error("expected error for empty pattern")
+	}
+}

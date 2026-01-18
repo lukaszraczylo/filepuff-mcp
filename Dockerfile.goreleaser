@@ -1,0 +1,13 @@
+FROM alpine:3.21
+ARG TARGETPLATFORM
+
+RUN apk add --no-cache ca-certificates tzdata git ripgrep
+
+COPY ${TARGETPLATFORM}/mcp-filepuff /usr/local/bin/mcp-filepuff
+
+RUN chmod +x /usr/local/bin/mcp-filepuff
+
+WORKDIR /workspace
+
+ENTRYPOINT ["/usr/local/bin/mcp-filepuff"]
+CMD ["-workspace", "/workspace"]
