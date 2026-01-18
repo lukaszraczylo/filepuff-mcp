@@ -8,9 +8,6 @@ on:
       - '**/release.yaml'
     branches:
       - main
-  push:
-    tags:
-      - 'v*'
 
 permissions:
   id-token: write
