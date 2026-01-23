@@ -46,6 +46,8 @@ func ExtractDocComment(n *sitter.Node, content []byte, lang protocol.Language) *
 		return extractPythonDocComment(n, content)
 	case protocol.LangC, protocol.LangCpp:
 		return extractCDocComment(n, content)
+	case protocol.LangElixir:
+		return extractElixirDocComment(n, content)
 	default:
 		return nil
 	}
@@ -547,4 +549,110 @@ func cleanPythonDocstring(doc string) string {
 	doc = strings.TrimSuffix(doc, `'''`)
 
 	return strings.TrimSpace(doc)
+}
+
+// extractElixirDocComment extracts Elixir documentation from @doc and @moduledoc attributes.
+// Elixir uses module attributes like @doc and @moduledoc for documentation.
+func extractElixirDocComment(n *sitter.Node, content []byte) *DocComment {
+	// Look for @doc or @moduledoc attribute preceding this node
+	prev := n.PrevSibling()
+
+	for prev != nil {
+		// Check if this is an unary_operator with @ (module attribute)
+		if prev.Type() == "unary_operator" {
+			text := GetNodeText(prev, content)
+			trimmed := strings.TrimSpace(text)
+
+			// Check for @doc or @moduledoc
+			if strings.HasPrefix(trimmed, "@doc") || strings.HasPrefix(trimmed, "@moduledoc") {
+				// Extract the documentation string
+				docText := extractElixirDocString(prev, content)
+				if docText != "" {
+					return &DocComment{
+						Text:      docText,
+						Raw:       text,
+						Style:     CommentStyleDocstring,
+						Tags:      nil,
+						StartLine: int(prev.StartPoint().Row) + 1,
+						EndLine:   int(prev.EndPoint().Row) + 1,
+					}
+				}
+			}
+		}
+
+		// Also check for regular # comments
+		if prev.Type() == "comment" {
+			comments := collectPrecedingComments(n, content, []string{"comment"})
+			if len(comments) > 0 {
+				var parts []string
+				var raw []string
+				startLine := -1
+				endLine := -1
+
+				for _, c := range comments {
+					text := GetNodeText(c, content)
+					raw = append(raw, text)
+
+					if startLine == -1 {
+						startLine = int(c.StartPoint().Row) + 1
+					}
+					endLine = int(c.EndPoint().Row) + 1
+
+					// Clean # comment
+					cleaned := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(text), "#"))
+					if cleaned != "" {
+						parts = append(parts, cleaned)
+					}
+				}
+
+				if len(parts) > 0 {
+					return &DocComment{
+						Text:      strings.Join(parts, "\n"),
+						Raw:       strings.Join(raw, "\n"),
+						Style:     CommentStyleHash,
+						Tags:      nil,
+						StartLine: startLine,
+						EndLine:   endLine,
+					}
+				}
+			}
+			break
+		}
+
+		prev = prev.PrevSibling()
+	}
+
+	return nil
+}
+
+// extractElixirDocString extracts the documentation string from an Elixir @doc/@moduledoc attribute.
+func extractElixirDocString(n *sitter.Node, content []byte) string {
+	// The doc attribute typically looks like:
+	// @doc """
+	// Documentation here
+	// """
+	// or
+	// @doc "Single line doc"
+
+	text := GetNodeText(n, content)
+
+	// Find the string content after @doc or @moduledoc
+	var docContent string
+
+	// Check for heredoc style (triple quotes)
+	if idx := strings.Index(text, `"""`); idx != -1 {
+		// Find the closing triple quotes
+		rest := text[idx+3:]
+		if endIdx := strings.Index(rest, `"""`); endIdx != -1 {
+			docContent = rest[:endIdx]
+		}
+	} else if idx := strings.Index(text, `"`); idx != -1 {
+		// Single quoted string
+		rest := text[idx+1:]
+		if endIdx := strings.Index(rest, `"`); endIdx != -1 {
+			docContent = rest[:endIdx]
+		}
+	}
+
+	return strings.TrimSpace(docContent)
 }

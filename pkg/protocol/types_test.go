@@ -29,10 +29,14 @@ func TestDetectLanguage(t *testing.T) {
 		{"index.html", LangHTML},
 		{"page.htm", LangHTML},
 		{"Component.vue", LangVue},
+		{"app.ex", LangElixir},
+		{"app_test.exs", LangElixir},
+		{"mix.exs", LangElixir},
 		{"unknown.txt", LangUnknown},
 		{"README", LangUnknown},
 		{"path/to/file.go", LangGo},
 		{"path/to/file.ts", LangTypeScript},
+		{"path/to/file.ex", LangElixir},
 	}
 
 	for _, tt := range tests {

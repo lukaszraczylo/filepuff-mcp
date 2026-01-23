@@ -60,6 +60,7 @@ const (
 	LangVue        Language = "vue"
 	LangJSON       Language = "json"
 	LangYAML       Language = "yaml"
+	LangElixir     Language = "elixir"
 	LangUnknown    Language = "unknown"
 )
 
@@ -87,6 +88,8 @@ func DetectLanguage(filename string) Language {
 		return LangJSON
 	case ".yaml", ".yml":
 		return LangYAML
+	case ".ex", ".exs":
+		return LangElixir
 	default:
 		return LangUnknown
 	}

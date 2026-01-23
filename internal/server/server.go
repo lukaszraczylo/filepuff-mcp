@@ -670,6 +670,8 @@ func languageToExtension(language string) string {
 		return ".c"
 	case "cpp", "c++":
 		return ".cpp"
+	case "elixir":
+		return ".ex"
 	default:
 		return ""
 	}

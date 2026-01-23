@@ -425,6 +425,7 @@ Apply an edit to a file. Uses AST-aware editing for code files with syntax valid
 | HTML | .html, .htm | Yes | Yes | - | Yes |
 | Vue | .vue | Yes | Yes* | - | Yes |
 | React | .jsx, .tsx | Yes | Yes | typescript-language-server | Yes |
+| Elixir | .ex, .exs | Yes | Yes | elixir-ls | Yes |
 
 \* Vue uses HTML parser for template sections
 

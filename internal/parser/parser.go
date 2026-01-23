@@ -11,6 +11,7 @@ import (
 	sitter "github.com/smacker/go-tree-sitter"
 	"github.com/smacker/go-tree-sitter/c"
 	"github.com/smacker/go-tree-sitter/cpp"
+	"github.com/smacker/go-tree-sitter/elixir"
 	"github.com/smacker/go-tree-sitter/golang"
 	"github.com/smacker/go-tree-sitter/html"
 	"github.com/smacker/go-tree-sitter/javascript"
@@ -88,10 +89,12 @@ func getLanguage(lang protocol.Language) (*sitter.Language, error) {
 	case protocol.LangVue:
 		// Vue SFC files use HTML-like template syntax, so we use the HTML parser
 		return html.GetLanguage(), nil
+	case protocol.LangElixir:
+		return elixir.GetLanguage(), nil
 	default:
 		return nil, errors.New(errors.ErrInvalidLanguage, fmt.Sprintf("language %s is not supported", lang)).
 			WithContext("language", string(lang)).
-			WithRemediation("Supported languages: Go, TypeScript, JavaScript, Python, C, C++, HTML, Vue")
+			WithRemediation("Supported languages: Go, TypeScript, JavaScript, Python, C, C++, HTML, Vue, Elixir")
 	}
 }
 

@@ -25,6 +25,8 @@ func ExtractSymbols(tree *sitter.Tree, content []byte, lang protocol.Language, f
 		return extractPythonSymbols(root, content, filename)
 	case protocol.LangC, protocol.LangCpp:
 		return extractCSymbols(root, content, filename)
+	case protocol.LangElixir:
+		return extractElixirSymbols(root, content, filename)
 	default:
 		return nil
 	}
@@ -471,4 +473,279 @@ func hasFunctionDeclarator(n *sitter.Node) bool {
 		return true
 	})
 	return found
+}
+
+// extractElixirSymbols extracts symbols from Elixir code.
+// Elixir uses `defmodule` for modules, `def`/`defp` for functions, and `defmacro`/`defmacrop` for macros.
+func extractElixirSymbols(root *sitter.Node, content []byte, filename string) []protocol.Symbol {
+	var symbols []protocol.Symbol
+
+	WalkTree(root, func(n *sitter.Node) bool {
+		var symbol *protocol.Symbol
+
+		switch n.Type() {
+		case "call":
+			symbol = extractElixirCall(n, content, filename)
+		}
+
+		if symbol != nil {
+			if doc := ExtractDocComment(n, content, protocol.LangElixir); doc != nil {
+				symbol.Doc = FormatDocComment(doc)
+			}
+			symbols = append(symbols, *symbol)
+		}
+
+		return true
+	})
+
+	return symbols
+}
+
+// extractElixirCall extracts symbols from Elixir call nodes (def, defp, defmodule, defmacro, etc.).
+func extractElixirCall(n *sitter.Node, content []byte, filename string) *protocol.Symbol {
+	// Get the function being called (first child is usually the target)
+	if n.NamedChildCount() < 1 {
+		return nil
+	}
+
+	target := n.NamedChild(0)
+	if target == nil {
+		return nil
+	}
+
+	targetText := GetNodeText(target, content)
+
+	switch targetText {
+	case "defmodule":
+		return extractElixirModule(n, content, filename)
+	case "def", "defp":
+		return extractElixirFunction(n, content, filename, targetText == "defp")
+	case "defmacro", "defmacrop":
+		return extractElixirMacro(n, content, filename)
+	case "defstruct":
+		return extractElixirStruct(n, content, filename)
+	case "defprotocol":
+		return extractElixirProtocol(n, content, filename)
+	case "defimpl":
+		return extractElixirImpl(n, content, filename)
+	}
+
+	return nil
+}
+
+// extractElixirModule extracts a module definition.
+func extractElixirModule(n *sitter.Node, content []byte, filename string) *protocol.Symbol {
+	// defmodule ModuleName do ... end
+	// The module name is in the arguments
+	args := n.ChildByFieldName("arguments")
+	if args == nil {
+		// Try finding it as the second named child
+		if n.NamedChildCount() >= 2 {
+			args = n.NamedChild(1)
+		}
+	}
+	if args == nil {
+		return nil
+	}
+
+	// Find the alias (module name) in the arguments
+	var moduleName string
+	WalkTree(args, func(node *sitter.Node) bool {
+		if node.Type() == "alias" {
+			moduleName = GetNodeText(node, content)
+			return false
+		}
+		return true
+	})
+
+	if moduleName == "" {
+		return nil
+	}
+
+	return &protocol.Symbol{
+		Name:     moduleName,
+		Kind:     protocol.SymbolModule,
+		Location: NodeLocation(n, filename),
+	}
+}
+
+// extractElixirFunction extracts a function definition.
+func extractElixirFunction(n *sitter.Node, content []byte, filename string, isPrivate bool) *protocol.Symbol {
+	// def function_name(args) do ... end
+	// The function name and args are in the arguments of the call
+	if n.NamedChildCount() < 2 {
+		return nil
+	}
+
+	// Second child contains the function definition
+	funcDef := n.NamedChild(1)
+	if funcDef == nil {
+		return nil
+	}
+
+	var funcName string
+
+	// The function definition can be:
+	// 1. A call node (function with args): func_name(arg1, arg2)
+	// 2. An identifier (function without args): func_name
+	switch funcDef.Type() {
+	case "call":
+		// Get the function name from the call target
+		if funcDef.NamedChildCount() >= 1 {
+			nameNode := funcDef.NamedChild(0)
+			if nameNode != nil {
+				funcName = GetNodeText(nameNode, content)
+			}
+		}
+	case "identifier":
+		funcName = GetNodeText(funcDef, content)
+	case "binary_operator":
+		// Guard clause: def func_name(args) when guard do ... end
+		// The left side contains the actual function call
+		WalkTree(funcDef, func(node *sitter.Node) bool {
+			if node.Type() == "call" && node.NamedChildCount() >= 1 {
+				nameNode := node.NamedChild(0)
+				if nameNode != nil && nameNode.Type() == "identifier" {
+					funcName = GetNodeText(nameNode, content)
+					return false
+				}
+			}
+			if node.Type() == "identifier" && funcName == "" {
+				funcName = GetNodeText(node, content)
+				return false
+			}
+			return true
+		})
+	}
+
+	if funcName == "" {
+		return nil
+	}
+
+	kind := protocol.SymbolFunction
+	if isPrivate {
+		funcName = funcName + " (private)"
+	}
+
+	return &protocol.Symbol{
+		Name:     funcName,
+		Kind:     kind,
+		Location: NodeLocation(n, filename),
+	}
+}
+
+// extractElixirMacro extracts a macro definition.
+func extractElixirMacro(n *sitter.Node, content []byte, filename string) *protocol.Symbol {
+	// Similar to function extraction
+	if n.NamedChildCount() < 2 {
+		return nil
+	}
+
+	funcDef := n.NamedChild(1)
+	if funcDef == nil {
+		return nil
+	}
+
+	var macroName string
+
+	switch funcDef.Type() {
+	case "call":
+		if funcDef.NamedChildCount() >= 1 {
+			nameNode := funcDef.NamedChild(0)
+			if nameNode != nil {
+				macroName = GetNodeText(nameNode, content)
+			}
+		}
+	case "identifier":
+		macroName = GetNodeText(funcDef, content)
+	}
+
+	if macroName == "" {
+		return nil
+	}
+
+	return &protocol.Symbol{
+		Name:     macroName + " (macro)",
+		Kind:     protocol.SymbolFunction,
+		Location: NodeLocation(n, filename),
+	}
+}
+
+// extractElixirStruct extracts a struct definition.
+func extractElixirStruct(n *sitter.Node, content []byte, filename string) *protocol.Symbol {
+	// defstruct is typically inside a module, the struct name is the module name
+	// We just mark this as a struct symbol
+	return &protocol.Symbol{
+		Name:     "defstruct",
+		Kind:     protocol.SymbolStruct,
+		Location: NodeLocation(n, filename),
+	}
+}
+
+// extractElixirProtocol extracts a protocol definition.
+func extractElixirProtocol(n *sitter.Node, content []byte, filename string) *protocol.Symbol {
+	// defprotocol ProtocolName do ... end
+	if n.NamedChildCount() < 2 {
+		return nil
+	}
+
+	args := n.NamedChild(1)
+	if args == nil {
+		return nil
+	}
+
+	var protocolName string
+	WalkTree(args, func(node *sitter.Node) bool {
+		if node.Type() == "alias" {
+			protocolName = GetNodeText(node, content)
+			return false
+		}
+		return true
+	})
+
+	if protocolName == "" {
+		return nil
+	}
+
+	return &protocol.Symbol{
+		Name:     protocolName,
+		Kind:     protocol.SymbolInterface,
+		Location: NodeLocation(n, filename),
+	}
+}
+
+// extractElixirImpl extracts a protocol implementation.
+func extractElixirImpl(n *sitter.Node, content []byte, filename string) *protocol.Symbol {
+	// defimpl Protocol, for: Type do ... end
+	if n.NamedChildCount() < 2 {
+		return nil
+	}
+
+	args := n.NamedChild(1)
+	if args == nil {
+		return nil
+	}
+
+	var implName string
+	WalkTree(args, func(node *sitter.Node) bool {
+		if node.Type() == "alias" {
+			if implName == "" {
+				implName = GetNodeText(node, content)
+			} else {
+				implName = implName + " for " + GetNodeText(node, content)
+				return false
+			}
+		}
+		return true
+	})
+
+	if implName == "" {
+		return nil
+	}
+
+	return &protocol.Symbol{
+		Name:     implName,
+		Kind:     protocol.SymbolClass,
+		Location: NodeLocation(n, filename),
+	}
 }
