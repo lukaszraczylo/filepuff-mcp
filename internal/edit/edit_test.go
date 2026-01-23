@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/lukaszraczylo/mcp-filepuff/internal/parser"
+	sitter "github.com/smacker/go-tree-sitter"
 )
 
 func TestValidateEdit(t *testing.T) {
@@ -752,6 +753,500 @@ func TestValidateTextEdit(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestResolveSelectorAtLineSpecificity(t *testing.T) {
+	// This test verifies that when using AtLine selector without Kind,
+	// the smallest (most specific) node is selected, not the largest parent.
+	registry := parser.NewRegistry()
+	defer registry.Close()
+	e := NewEngine(registry)
+
+	// Create a Go file with nested structures
+	content := []byte(`package main
+
+const (
+	// First const group
+	FOO = "foo"
+	BAR = "bar"
+)
+
+const (
+	// Second const group
+	BAZ = "baz"
+	QUX = "qux"
+)
+
+func main() {
+	println(FOO)
+}
+`)
+
+	ctx := context.Background()
+	result, err := registry.Parse(ctx, "test.go", content)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+
+	// Selector at line 5 (FOO = "foo") should match the specific const_spec,
+	// not the entire const_declaration or source_file
+	node, err := e.resolveSelector(ASTSelector{AtLine: 5}, result.Tree, content)
+	if err != nil {
+		t.Fatalf("resolve failed: %v", err)
+	}
+
+	// The node should be small - just the "FOO = \"foo\"" part
+	nodeText := string(content[node.StartByte():node.EndByte()])
+	if strings.Contains(nodeText, "BAR") {
+		t.Errorf("selected node is too large (contains BAR): %q", nodeText)
+	}
+	if strings.Contains(nodeText, "package") {
+		t.Errorf("selected node is the entire file: %q", truncateString(nodeText, 50))
+	}
+
+	t.Logf("Selected node type: %s, text: %q", node.Type(), truncateString(nodeText, 100))
+}
+
+// ==================== Regression tests for file corruption bug ====================
+// These tests verify that the fix for the AtLine selector specificity issue
+// prevents file corruption when inserting content.
+
+func TestRegressionInsertAfterAtLine(t *testing.T) {
+	// Regression test: Insert after a specific const should not corrupt the file
+	// by inserting at the wrong location (e.g., at start of file or wrong block)
+	registry := parser.NewRegistry()
+	defer registry.Close()
+	e := NewEngine(registry)
+
+	tmpDir := t.TempDir()
+	tmpFile := filepath.Join(tmpDir, "queries.go")
+
+	// Simulate a typical Go queries file
+	content := `package org
+
+const (
+	// queryGetOrg retrieves an organization by ID
+	queryGetOrg = ` + "`" + `
+		SELECT id, name FROM orgs WHERE id = $1
+	` + "`" + `
+
+	// queryListOrgs lists all organizations
+	queryListOrgs = ` + "`" + `
+		SELECT id, name FROM orgs
+	` + "`" + `
+)
+
+const (
+	// queryCreateOrg creates a new organization
+	queryCreateOrg = ` + "`" + `
+		INSERT INTO orgs (name) VALUES ($1)
+	` + "`" + `
+)
+`
+	if err := os.WriteFile(tmpFile, []byte(content), 0600); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// Insert after the first const block (line ~14) - should NOT corrupt file
+	edit := &ASTEdit{
+		File:      tmpFile,
+		Operation: EditInsertAfter,
+		Selector: ASTSelector{
+			Kind:   "const_declaration",
+			AtLine: 5, // Line within the first const block
+		},
+		NewContent: `const (
+	// queryGetGitHub retrieves GitHub settings
+	queryGetGitHub = ` + "`" + `SELECT * FROM github` + "`" + `
+)`,
+	}
+
+	result, err := e.Apply(ctx, edit)
+	if err != nil {
+		t.Fatalf("apply failed: %v", err)
+	}
+
+	if !result.Success {
+		t.Fatalf("apply was not successful: %s", result.Error)
+	}
+
+	// Verify the file structure is preserved
+	newContent, _ := os.ReadFile(tmpFile)
+	newStr := string(newContent)
+
+	// Check the file still starts with package declaration
+	if !strings.HasPrefix(newStr, "package org") {
+		t.Errorf("file corrupted: package declaration missing or moved\nContent:\n%s", newStr)
+	}
+
+	// Check original content is preserved
+	if !strings.Contains(newStr, "queryGetOrg") {
+		t.Error("original queryGetOrg was lost")
+	}
+	if !strings.Contains(newStr, "queryListOrgs") {
+		t.Error("original queryListOrgs was lost")
+	}
+	if !strings.Contains(newStr, "queryCreateOrg") {
+		t.Error("original queryCreateOrg was lost")
+	}
+
+	// Check new content was added
+	if !strings.Contains(newStr, "queryGetGitHub") {
+		t.Error("new queryGetGitHub was not added")
+	}
+
+	// Verify insertion location: queryGetGitHub should appear AFTER queryListOrgs
+	// but the exact position depends on where the first const block ends
+	listOrgsIdx := strings.Index(newStr, "queryListOrgs")
+	gitHubIdx := strings.Index(newStr, "queryGetGitHub")
+	if gitHubIdx < listOrgsIdx {
+		t.Errorf("queryGetGitHub inserted before queryListOrgs - wrong location")
+	}
+
+	t.Logf("Result diff:\n%s", result.Diff)
+}
+
+func TestRegressionInsertBeforeAtLine(t *testing.T) {
+	// Regression test: Insert before should work correctly with AtLine
+	registry := parser.NewRegistry()
+	defer registry.Close()
+	e := NewEngine(registry)
+
+	tmpDir := t.TempDir()
+	tmpFile := filepath.Join(tmpDir, "main.go")
+
+	content := `package main
+
+import "fmt"
+
+func hello() {
+	fmt.Println("hello")
+}
+
+func goodbye() {
+	fmt.Println("goodbye")
+}
+`
+	if err := os.WriteFile(tmpFile, []byte(content), 0600); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// Insert before goodbye function
+	edit := &ASTEdit{
+		File:      tmpFile,
+		Operation: EditInsertBefore,
+		Selector: ASTSelector{
+			Kind:   "function_declaration",
+			Name:   "goodbye",
+			AtLine: 9,
+		},
+		NewContent: `func middle() {
+	fmt.Println("middle")
+}`,
+	}
+
+	result, err := e.Apply(ctx, edit)
+	if err != nil {
+		t.Fatalf("apply failed: %v", err)
+	}
+
+	if !result.Success {
+		t.Fatalf("apply was not successful: %s", result.Error)
+	}
+
+	newContent, _ := os.ReadFile(tmpFile)
+	newStr := string(newContent)
+
+	// Verify order: hello -> middle -> goodbye
+	helloIdx := strings.Index(newStr, "func hello()")
+	middleIdx := strings.Index(newStr, "func middle()")
+	goodbyeIdx := strings.Index(newStr, "func goodbye()")
+
+	if helloIdx == -1 || middleIdx == -1 || goodbyeIdx == -1 {
+		t.Fatalf("missing functions in output:\n%s", newStr)
+	}
+
+	if helloIdx >= middleIdx || middleIdx >= goodbyeIdx {
+		t.Errorf("functions in wrong order: hello=%d, middle=%d, goodbye=%d", helloIdx, middleIdx, goodbyeIdx)
+	}
+}
+
+func TestRegressionNestedStructures(t *testing.T) {
+	// Regression test: Nested structures should select the correct node
+	registry := parser.NewRegistry()
+	defer registry.Close()
+	e := NewEngine(registry)
+
+	tmpDir := t.TempDir()
+	tmpFile := filepath.Join(tmpDir, "nested.go")
+
+	content := `package main
+
+type Outer struct {
+	Inner struct {
+		Field string
+	}
+	Other int
+}
+
+func main() {
+	o := Outer{}
+	_ = o
+}
+`
+	if err := os.WriteFile(tmpFile, []byte(content), 0600); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// Replace the Inner struct field - should not affect Outer
+	edit := &ASTEdit{
+		File:      tmpFile,
+		Operation: EditReplace,
+		Selector: ASTSelector{
+			AtLine: 5, // Line with "Field string"
+		},
+		NewContent: `Name string`,
+	}
+
+	result, err := e.Apply(ctx, edit)
+	if err != nil {
+		t.Fatalf("apply failed: %v", err)
+	}
+
+	if !result.Success {
+		t.Fatalf("apply was not successful: %s", result.Error)
+	}
+
+	newContent, _ := os.ReadFile(tmpFile)
+	newStr := string(newContent)
+
+	// Verify structure is preserved
+	if !strings.Contains(newStr, "type Outer struct") {
+		t.Error("Outer struct declaration lost")
+	}
+	if !strings.Contains(newStr, "Inner struct") {
+		t.Error("Inner struct declaration lost")
+	}
+	if !strings.Contains(newStr, "Other int") {
+		t.Error("Other field lost")
+	}
+	if !strings.Contains(newStr, "Name string") {
+		t.Error("Name field not added")
+	}
+	if strings.Contains(newStr, "Field string") {
+		t.Error("Old Field string should be replaced")
+	}
+}
+
+func TestRegressionPreservesFileIntegrity(t *testing.T) {
+	// Regression test: Edit should not corrupt unrelated parts of the file
+	registry := parser.NewRegistry()
+	defer registry.Close()
+	e := NewEngine(registry)
+
+	tmpDir := t.TempDir()
+	tmpFile := filepath.Join(tmpDir, "integrity.go")
+
+	content := `package main
+
+// Copyright 2024 Example Corp
+// License: MIT
+
+import (
+	"fmt"
+	"os"
+)
+
+const Version = "1.0.0"
+
+func main() {
+	fmt.Println(Version)
+	os.Exit(0)
+}
+
+// End of file comment
+`
+	if err := os.WriteFile(tmpFile, []byte(content), 0600); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// Replace the Version constant (line 11)
+	edit := &ASTEdit{
+		File:      tmpFile,
+		Operation: EditReplace,
+		Selector: ASTSelector{
+			Kind:   "const_declaration",
+			AtLine: 11,
+		},
+		NewContent: `const Version = "2.0.0"`,
+	}
+
+	result, err := e.Apply(ctx, edit)
+	if err != nil {
+		t.Fatalf("apply failed: %v", err)
+	}
+
+	if !result.Success {
+		t.Fatalf("apply was not successful: %s", result.Error)
+	}
+
+	newContent, _ := os.ReadFile(tmpFile)
+	newStr := string(newContent)
+
+	// Verify all unrelated parts are preserved exactly
+	checks := []string{
+		"package main",
+		"// Copyright 2024 Example Corp",
+		"// License: MIT",
+		`"fmt"`,
+		`"os"`,
+		"func main()",
+		"fmt.Println(Version)",
+		"os.Exit(0)",
+		"// End of file comment",
+	}
+
+	for _, check := range checks {
+		if !strings.Contains(newStr, check) {
+			t.Errorf("file integrity violated: missing %q\nContent:\n%s", check, newStr)
+		}
+	}
+
+	// Verify the change was made
+	if !strings.Contains(newStr, `"2.0.0"`) {
+		t.Error("Version was not updated to 2.0.0")
+	}
+}
+
+func TestRegressionMultipleConstBlocks(t *testing.T) {
+	// Regression test: Multiple const blocks - edit should target correct one
+	registry := parser.NewRegistry()
+	defer registry.Close()
+	e := NewEngine(registry)
+
+	tmpDir := t.TempDir()
+	tmpFile := filepath.Join(tmpDir, "consts.go")
+
+	content := `package main
+
+const (
+	A = 1
+	B = 2
+)
+
+const (
+	C = 3
+	D = 4
+)
+
+const (
+	E = 5
+	F = 6
+)
+`
+	if err := os.WriteFile(tmpFile, []byte(content), 0600); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// Insert after the second const block (containing C, D)
+	edit := &ASTEdit{
+		File:      tmpFile,
+		Operation: EditInsertAfter,
+		Selector: ASTSelector{
+			Kind:   "const_declaration",
+			AtLine: 9, // Line with C = 3
+		},
+		NewContent: `const X = 99`,
+	}
+
+	result, err := e.Apply(ctx, edit)
+	if err != nil {
+		t.Fatalf("apply failed: %v", err)
+	}
+
+	if !result.Success {
+		t.Fatalf("apply was not successful: %s", result.Error)
+	}
+
+	newContent, _ := os.ReadFile(tmpFile)
+	newStr := string(newContent)
+
+	// X should appear after D but before E
+	dIdx := strings.Index(newStr, "D = 4")
+	xIdx := strings.Index(newStr, "X = 99")
+	eIdx := strings.Index(newStr, "E = 5")
+
+	if xIdx == -1 {
+		t.Fatalf("X = 99 not found in output:\n%s", newStr)
+	}
+
+	if dIdx >= xIdx || xIdx >= eIdx {
+		t.Errorf("X inserted in wrong position: D=%d, X=%d, E=%d\nContent:\n%s", dIdx, xIdx, eIdx, newStr)
+	}
+}
+
+func TestSortBySpecificity(t *testing.T) {
+	// Unit test for the sortBySpecificity helper function
+	registry := parser.NewRegistry()
+	defer registry.Close()
+
+	content := []byte(`package main
+
+const (
+	FOO = "foo"
+)
+`)
+
+	ctx := context.Background()
+	result, err := registry.Parse(ctx, "test.go", content)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+
+	// Collect all nodes that span line 4
+	var nodesAtLine4 []*sitter.Node
+	parser.WalkTree(result.Tree.RootNode(), func(n *sitter.Node) bool {
+		startLine := int(n.StartPoint().Row) + 1
+		endLine := int(n.EndPoint().Row) + 1
+		if 4 >= startLine && 4 <= endLine {
+			nodesAtLine4 = append(nodesAtLine4, n)
+		}
+		return true
+	})
+
+	if len(nodesAtLine4) < 2 {
+		t.Skip("not enough nodes to test sorting")
+	}
+
+	// Sort and verify smallest declaration-like node comes first
+	sorted := sortBySpecificity(nodesAtLine4)
+
+	// First node should be a declaration-like node, not source_file
+	firstType := sorted[0].Type()
+	if firstType == "source_file" {
+		t.Errorf("source_file should not be first after sorting, got types: %v",
+			nodeTypes(sorted))
+	}
+
+	t.Logf("Sorted node types: %v", nodeTypes(sorted))
+}
+
+func nodeTypes(nodes []*sitter.Node) []string {
+	types := make([]string, len(nodes))
+	for i, n := range nodes {
+		types[i] = n.Type()
+	}
+	return types
 }
 
 func TestFindLineRange(t *testing.T) {

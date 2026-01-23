@@ -352,6 +352,12 @@ func (e *Engine) resolveSelector(sel ASTSelector, tree *sitter.Tree, content []b
 		return nil, errors.NewNodeNotFoundError(selectorDesc)
 	}
 
+	// When using AtLine without a specific Kind, prefer the smallest (most specific) node.
+	// This prevents matching large parent nodes like source_file when we want a specific declaration.
+	if sel.AtLine > 0 && sel.Kind == "" {
+		matches = sortBySpecificity(matches)
+	}
+
 	// Use index to select specific match
 	index := sel.Index
 	if index < 0 || index >= len(matches) {
@@ -359,6 +365,76 @@ func (e *Engine) resolveSelector(sel ASTSelector, tree *sitter.Tree, content []b
 	}
 
 	return matches[index], nil
+}
+
+// sortBySpecificity sorts nodes so that the most useful nodes come first.
+// Prefers: 1) Named nodes (declarations/statements) over anonymous tokens
+// 2) Smaller nodes over larger ones (more specific)
+func sortBySpecificity(nodes []*sitter.Node) []*sitter.Node {
+	if len(nodes) <= 1 {
+		return nodes
+	}
+
+	// Sort by specificity: named nodes first, then by size (smallest first)
+	result := make([]*sitter.Node, len(nodes))
+	copy(result, nodes)
+
+	for i := 0; i < len(result)-1; i++ {
+		for j := i + 1; j < len(result); j++ {
+			if shouldPrefer(result[j], result[i]) {
+				result[i], result[j] = result[j], result[i]
+			}
+		}
+	}
+
+	return result
+}
+
+// shouldPrefer returns true if node a should come before node b.
+func shouldPrefer(a, b *sitter.Node) bool {
+	// Prefer named nodes over anonymous tokens
+	aIsNamed := a.IsNamed()
+	bIsNamed := b.IsNamed()
+	if aIsNamed && !bIsNamed {
+		return true
+	}
+	if !aIsNamed && bIsNamed {
+		return false
+	}
+
+	// Both named or both anonymous: prefer smaller meaningful nodes
+	// But filter out very small nodes (likely just identifiers/literals)
+	aSize := a.EndByte() - a.StartByte()
+	bSize := b.EndByte() - b.StartByte()
+
+	// If both are named, prefer "declaration" or "statement" types
+	aIsDecl := isDeclarationLike(a.Type())
+	bIsDecl := isDeclarationLike(b.Type())
+	if aIsDecl && !bIsDecl {
+		return true
+	}
+	if !aIsDecl && bIsDecl {
+		return false
+	}
+
+	// Same category: prefer smaller
+	return aSize < bSize
+}
+
+// isDeclarationLike returns true for node types that represent declarations or statements.
+func isDeclarationLike(nodeType string) bool {
+	// Common declaration/statement patterns across languages
+	declarationPatterns := []string{
+		"declaration", "definition", "statement", "spec", "clause",
+		"function", "method", "class", "struct", "interface", "type",
+		"import", "package", "module", "const", "var", "let",
+	}
+	for _, pattern := range declarationPatterns {
+		if strings.Contains(nodeType, pattern) {
+			return true
+		}
+	}
+	return false
 }
 
 // matchesSelector checks if a node matches the selector criteria.
