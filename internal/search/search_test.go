@@ -259,7 +259,7 @@ func TestSearchIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	t.Cleanup(func() { _ = os.RemoveAll(tmpDir) })
 
 	// Create test files
 	testFile := filepath.Join(tmpDir, "test.go")
@@ -269,7 +269,7 @@ func main() {
 	println("Hello, World!")
 }
 `
-	err = os.WriteFile(testFile, []byte(content), 0600)
+	err = os.WriteFile(testFile, []byte(content), 0o600)
 	if err != nil {
 		t.Fatalf("failed to write test file: %v", err)
 	}

@@ -2,6 +2,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +18,7 @@ type Config struct {
 	LSPTimeout       time.Duration     `json:"lsp_timeout"`
 	SearchTimeout    time.Duration     `json:"search_timeout"`
 	MaxFileSize      int64             `json:"max_file_size"`
+	MaxParseSize     int64             `json:"max_parse_size"`
 	MaxSearchResults int               `json:"max_search_results"`
 	MaxEditSize      int64             `json:"max_edit_size"`
 	EnableLSP        bool              `json:"enable_lsp"`
@@ -29,6 +31,7 @@ const (
 	DefaultLSPTimeout       = 5 * time.Minute
 	DefaultSearchTimeout    = 30 * time.Second
 	DefaultMaxFileSize      = 10 * 1024 * 1024 // 10 MB
+	DefaultMaxParseSize     = 10 * 1024 * 1024 // 10 MB
 	DefaultMaxSearchResults = 1000
 	DefaultMaxEditSize      = 100 * 1024 // 100 KB
 )
@@ -40,6 +43,7 @@ func Default() *Config {
 		LSPTimeout:       DefaultLSPTimeout,
 		SearchTimeout:    DefaultSearchTimeout,
 		MaxFileSize:      DefaultMaxFileSize,
+		MaxParseSize:     DefaultMaxParseSize,
 		MaxSearchResults: DefaultMaxSearchResults,
 		MaxEditSize:      DefaultMaxEditSize,
 		EnableLSP:        true,
@@ -171,4 +175,42 @@ func (c *Config) IsPathAllowed(path string) bool {
 	// This prevents both "../" attacks and symlink bypasses
 	// Also reject empty relative path (which means it's the workspace root itself)
 	return rel != "." && !strings.HasPrefix(rel, "..")
+}
+
+// Validate validates the configuration and returns an error if invalid.
+// Checks include:
+// - MaxFileSize and MaxParseSize must be positive
+// - LSPTimeout must be positive
+// - WorkspaceRoot must exist (when not empty)
+func (c *Config) Validate() error {
+	// Validate MaxFileSize
+	if c.MaxFileSize <= 0 {
+		return fmt.Errorf("max_file_size must be positive, got %d", c.MaxFileSize)
+	}
+
+	// Validate MaxParseSize
+	if c.MaxParseSize <= 0 {
+		return fmt.Errorf("max_parse_size must be positive, got %d", c.MaxParseSize)
+	}
+
+	// Validate LSPTimeout
+	if c.LSPTimeout <= 0 {
+		return fmt.Errorf("lsp_timeout must be positive, got %v", c.LSPTimeout)
+	}
+
+	// Validate WorkspaceRoot exists
+	if c.WorkspaceRoot != "" {
+		info, err := os.Stat(c.WorkspaceRoot)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return fmt.Errorf("workspace_root does not exist: %s", c.WorkspaceRoot)
+			}
+			return fmt.Errorf("cannot access workspace_root: %w", err)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("workspace_root is not a directory: %s", c.WorkspaceRoot)
+		}
+	}
+
+	return nil
 }

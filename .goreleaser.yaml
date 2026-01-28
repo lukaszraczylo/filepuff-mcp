@@ -11,7 +11,7 @@ before:
     - go generate ./...
 
 builds:
-  - id: mcp-filepuff
+  - id: mcp-filepuff-cgo
     main: ./cmd/mcp-filepuff
     binary: mcp-filepuff
     env:
@@ -37,6 +37,25 @@ builds:
         goarch: arm64
       - goos: windows
         goarch: arm64
+
+  - id: mcp-filepuff-static
+    main: ./cmd/mcp-filepuff
+    binary: mcp-filepuff
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+      - -extldflags=-static
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
 
 archives:
   - id: default

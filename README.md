@@ -480,6 +480,8 @@ make clean
 
 ## Architecture
 
+### High-Level Overview
+
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                    MCP Server                           │
@@ -493,6 +495,220 @@ make clean
 │  Search   │   Parser    │    LSP     │     Edit        │
 │ (ripgrep) │(tree-sitter)│  Manager   │    Engine       │
 └───────────┴─────────────┴────────────┴─────────────────┘
+```
+
+### Detailed Sequence Diagrams
+
+#### LSP Integration Flow
+
+The following diagram shows how LSP requests (hover, definition, references) flow through the system:
+
+```mermaid
+sequenceDiagram
+    participant Client as MCP Client
+    participant Server as MCP Server
+    participant LSPMgr as LSP Manager
+    participant LSPSrv as LSP Server (gopls/etc)
+    participant FS as File System
+    
+    Client->>Server: symbol_at(file, line, col)
+    activate Server
+    
+    Server->>LSPMgr: GetServer(language)
+    activate LSPMgr
+    
+    alt Server Not Running
+        LSPMgr->>LSPSrv: Start Process
+        LSPMgr->>LSPSrv: initialize request
+        LSPSrv-->>LSPMgr: capabilities
+        LSPMgr->>LSPSrv: initialized notification
+    end
+    
+    LSPMgr-->>Server: ManagedServer
+    deactivate LSPMgr
+    
+    Server->>LSPMgr: ensureDocumentOpen(file)
+    activate LSPMgr
+    
+    alt Document Not Open
+        LSPMgr->>FS: ReadFile(path)
+        FS-->>LSPMgr: content
+        LSPMgr->>LSPSrv: textDocument/didOpen
+    end
+    
+    LSPMgr-->>Server: ready
+    deactivate LSPMgr
+    
+    Server->>LSPSrv: textDocument/hover
+    activate LSPSrv
+    LSPSrv-->>Server: HoverResult
+    deactivate LSPSrv
+    
+    Server-->>Client: Symbol information
+    deactivate Server
+```
+
+#### Edit Operation Flow
+
+The edit engine uses atomic writes and validation to ensure safe file modifications:
+
+```mermaid
+sequenceDiagram
+    participant Client as MCP Client
+    participant Server as MCP Server
+    participant Edit as Edit Engine
+    participant Parser as Parser Registry
+    participant FS as File System
+    
+    Client->>Server: edit_apply(file, operation, selector, content)
+    activate Server
+    
+    Server->>Edit: Apply(ctx, edit)
+    activate Edit
+    
+    Edit->>Edit: lockFile(path)
+    Note over Edit: Per-file mutex prevents<br/>concurrent edits
+    
+    Edit->>FS: ReadFile(path)
+    FS-->>Edit: original content
+    
+    alt AST-Aware Mode (code files)
+        Edit->>Parser: Parse(ctx, path, content)
+        activate Parser
+        Parser-->>Edit: ParseResult with AST
+        deactivate Parser
+        
+        Edit->>Edit: resolveSelector(selector, tree)
+        Note over Edit: Find target node by<br/>kind, name, line, index
+        
+        Edit->>Edit: applyEdit(operation, node, content)
+        Note over Edit: Apply replace/insert/delete<br/>with indentation preservation
+        
+        Edit->>Parser: Parse(ctx, path, newContent)
+        activate Parser
+        Parser-->>Edit: Validate syntax
+        deactivate Parser
+        
+        alt Syntax Error
+            Edit-->>Server: ValidationError
+            Server-->>Client: Error: invalid syntax
+        end
+    else Text Mode (non-code files)
+        Edit->>Edit: resolveTextSelector(selector)
+        Note over Edit: Find by text, pattern,<br/>or line range
+        
+        Edit->>Edit: applyTextEditOperation
+    end
+    
+    Edit->>Edit: generateDiff(original, new)
+    
+    Edit->>FS: Stat(path) - get permissions
+    Edit->>FS: WriteFile(path, content, perm)
+    Note over Edit,FS: Atomic write preserves<br/>original permissions
+    
+    Edit->>Edit: unlockFile(path)
+    
+    Edit-->>Server: EditResult{Success, Diff}
+    deactivate Edit
+    
+    Server-->>Client: Success + Diff
+    deactivate Server
+```
+
+#### Parse and Cache Flow
+
+The parser uses content-based caching for efficient AST reuse:
+
+```mermaid
+sequenceDiagram
+    participant Client as MCP Client
+    participant Server as MCP Server
+    participant Parser as Parser Registry
+    participant Cache as LRU Cache
+    participant TS as Tree-sitter
+    
+    Client->>Server: file_read(path, include_ast=true)
+    activate Server
+    
+    Server->>Parser: Parse(ctx, path, content)
+    activate Parser
+    
+    Parser->>Parser: contentHash(content)
+    Note over Parser: xxHash64 for fast<br/>content fingerprinting
+    
+    Parser->>Cache: Get(hash)
+    activate Cache
+    
+    alt Cache Hit
+        Cache-->>Parser: CachedTree
+        Parser->>Parser: cacheHits++
+        Note over Parser: ~100x faster than parsing
+    else Cache Miss
+        Cache-->>Parser: nil
+        deactivate Cache
+        Parser->>Parser: cacheMisses++
+        
+        Parser->>Parser: GetParser(language)
+        Note over Parser: One parser per language,<br/>reused across requests
+        
+        Parser->>TS: ParseCtx(ctx, content)
+        activate TS
+        Note over TS: Tree-sitter parsing<br/>with timeout support
+        TS-->>Parser: *sitter.Tree
+        deactivate TS
+        
+        Parser->>Cache: Add(hash, tree)
+        activate Cache
+        Note over Cache: LRU eviction when<br/>capacity reached (100 entries)
+        Cache-->>Parser: stored
+        deactivate Cache
+    end
+    
+    Parser->>Parser: extractErrors(tree)
+    Parser->>Parser: ExtractSymbols(tree)
+    
+    Parser-->>Server: ParseResult{Tree, Language, Errors, Symbols}
+    deactivate Parser
+    
+    Server->>Server: generateASTSummary()
+    Server-->>Client: File content + Symbol summary
+    deactivate Server
+```
+
+#### Request Flow Summary
+
+```mermaid
+flowchart TB
+    subgraph "MCP Protocol Layer"
+        A[MCP Client] --> B[MCP Server]
+    end
+    
+    subgraph "Tool Handlers"
+        B --> C{Tool Type}
+        C -->|Search| D[file_search]
+        C -->|Read| E[file_read]
+        C -->|Query| F[ast_query]
+        C -->|LSP| G[symbol_at<br/>find_definition<br/>find_references]
+        C -->|Edit| H[edit_preview<br/>edit_apply]
+    end
+    
+    subgraph "Core Engines"
+        D --> I[Search Engine<br/>ripgrep]
+        E --> J[Parser Registry]
+        F --> J
+        F --> K[Query Matcher]
+        G --> L[LSP Manager]
+        H --> M[Edit Engine]
+        M --> J
+    end
+    
+    subgraph "External Systems"
+        I --> N[(File System)]
+        J --> O[Tree-sitter]
+        J --> P[(Parse Cache)]
+        L --> Q[gopls<br/>typescript-language-server<br/>pylsp<br/>clangd]
+        M --> N
+    end
 ```
 
 ## Troubleshooting

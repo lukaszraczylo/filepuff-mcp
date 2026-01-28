@@ -2,6 +2,7 @@
 package server
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"log/slog"
@@ -37,7 +38,7 @@ type Server struct {
 
 // New creates a new MCP server instance.
 func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
-	parserRegistry := parser.NewRegistry()
+	parserRegistry := parser.NewRegistryWithSize(cfg.MaxParseSize)
 	s := &Server{
 		cfg:     cfg,
 		logger:  logger,
@@ -545,7 +546,25 @@ func symbolKindIcon(kind protocol.SymbolKind) string {
 }
 
 func splitLines(s string) []string {
-	// Use optimized stdlib implementation (2-3x faster than manual loop)
+	// For large files (> 1MB), use bufio.Scanner which is more memory efficient
+	// For smaller files, use simple string split which is faster
+	const largeSizeThreshold = 1024 * 1024 // 1MB
+
+	if len(s) > largeSizeThreshold {
+		// Use scanner for large files
+		scanner := bufio.NewScanner(strings.NewReader(s))
+		var lines []string
+		for scanner.Scan() {
+			lines = append(lines, scanner.Text())
+		}
+		// Handle potential error and add empty line if string ended with newline
+		if len(s) > 0 && s[len(s)-1] == '\n' {
+			lines = append(lines, "")
+		}
+		return lines
+	}
+
+	// Use optimized stdlib implementation for smaller files (2-3x faster than manual loop)
 	return strings.Split(s, "\n")
 }
 
@@ -596,6 +615,13 @@ func (s *Server) handleASTQuery(ctx context.Context, request mcp.CallToolRequest
 		}
 
 		err := filepath.Walk(searchPath, func(path string, info os.FileInfo, err error) error {
+			// Check for context cancellation
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+
 			if err != nil {
 				return nil // Skip files with errors
 			}
@@ -956,25 +982,58 @@ func (s *Server) handleEdit(ctx context.Context, request mcp.CallToolRequest, ap
 // Run starts the MCP server and blocks until shutdown.
 func (s *Server) Run(ctx context.Context) error {
 	// Set up signal handling for graceful shutdown
-	_, cancel := context.WithCancel(ctx)
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigChan)
 
+	// Channel to communicate server errors
+	errChan := make(chan error, 1)
+
+	// Start server in goroutine
 	go func() {
-		sig := <-sigChan
-		s.logger.Info("received shutdown signal", "signal", sig)
-		cancel()
+		s.logger.Info("starting MCP server",
+			"workspace", s.cfg.WorkspaceRoot,
+			"lsp_enabled", s.cfg.EnableLSP,
+		)
+		errChan <- server.ServeStdio(s.mcp)
 	}()
 
-	s.logger.Info("starting MCP server",
-		"workspace", s.cfg.WorkspaceRoot,
-		"lsp_enabled", s.cfg.EnableLSP,
-	)
+	// Wait for either signal or server error
+	select {
+	case sig := <-sigChan:
+		s.logger.Info("received shutdown signal", "signal", sig)
 
-	// Start the MCP server with stdio transport
-	return server.ServeStdio(s.mcp)
+		// Create timeout context for shutdown
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer shutdownCancel()
+
+		// Call graceful shutdown
+		if err := s.Shutdown(shutdownCtx); err != nil {
+			s.logger.Error("error during shutdown", "error", err)
+			return err
+		}
+
+		s.logger.Info("server shutdown complete")
+		return nil
+
+	case err := <-errChan:
+		// Server stopped on its own
+		return err
+
+	case <-ctx.Done():
+		// Context cancelled externally
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer shutdownCancel()
+
+		if err := s.Shutdown(shutdownCtx); err != nil {
+			s.logger.Error("error during shutdown", "error", err)
+		}
+
+		return ctx.Err()
+	}
 }
 
 // Shutdown gracefully shuts down the server.

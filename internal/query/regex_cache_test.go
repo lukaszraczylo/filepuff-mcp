@@ -4,23 +4,25 @@ import (
 	"regexp"
 	"sync"
 	"testing"
+
+	"github.com/lukaszraczylo/mcp-filepuff/internal/util"
 )
 
 // TestCompileRegexCaching tests that regex compilation is cached.
 func TestCompileRegexCaching(t *testing.T) {
 	// Clear cache before test
-	regexCache = sync.Map{}
+	util.ClearRegexCache()
 
 	pattern := `^test_\w+$`
 
 	// First compilation
-	re1, err := compileRegex(pattern)
+	re1, err := util.CompileRegex(pattern)
 	if err != nil {
 		t.Fatalf("First compile failed: %v", err)
 	}
 
 	// Second compilation should return cached version
-	re2, err := compileRegex(pattern)
+	re2, err := util.CompileRegex(pattern)
 	if err != nil {
 		t.Fatalf("Second compile failed: %v", err)
 	}
@@ -29,22 +31,12 @@ func TestCompileRegexCaching(t *testing.T) {
 	if re1 != re2 {
 		t.Error("Expected cached regex to be reused, got different objects")
 	}
-
-	// Verify it's in the cache
-	cached, ok := regexCache.Load(pattern)
-	if !ok {
-		t.Error("Pattern not found in cache")
-	}
-
-	if cached.(*regexp.Regexp) != re1 {
-		t.Error("Cached regex doesn't match returned regex")
-	}
 }
 
 // TestCompileRegexConcurrent tests concurrent regex compilation.
 func TestCompileRegexConcurrent(t *testing.T) {
 	// Clear cache before test
-	regexCache = sync.Map{}
+	util.ClearRegexCache()
 
 	pattern := `[a-z]+_\d+`
 	const numGoroutines = 100
@@ -60,7 +52,7 @@ func TestCompileRegexConcurrent(t *testing.T) {
 		go func() {
 			defer wg.Done()
 
-			re, err := compileRegex(pattern)
+			re, err := util.CompileRegex(pattern)
 			if err != nil {
 				errors <- err
 				return
@@ -89,26 +81,30 @@ func TestCompileRegexConcurrent(t *testing.T) {
 // TestCompileRegexInvalidPattern tests error handling for invalid patterns.
 func TestCompileRegexInvalidPattern(t *testing.T) {
 	// Clear cache before test
-	regexCache = sync.Map{}
+	util.ClearRegexCache()
 
 	invalidPattern := `[invalid(`
 
-	_, err := compileRegex(invalidPattern)
+	_, err := util.CompileRegex(invalidPattern)
 	if err == nil {
 		t.Error("Expected error for invalid pattern, got nil")
 	}
 
-	// Invalid patterns should not be cached
-	_, ok := regexCache.Load(invalidPattern)
-	if ok {
-		t.Error("Invalid pattern should not be cached")
+	// Verify that a valid pattern still works after an invalid one
+	validPattern := `^valid$`
+	re, err := util.CompileRegex(validPattern)
+	if err != nil {
+		t.Errorf("Expected valid pattern to compile, got error: %v", err)
+	}
+	if re == nil {
+		t.Error("Expected non-nil regex for valid pattern")
 	}
 }
 
 // TestCompileRegexMultiplePatterns tests that different patterns are cached separately.
 func TestCompileRegexMultiplePatterns(t *testing.T) {
 	// Clear cache before test
-	regexCache = sync.Map{}
+	util.ClearRegexCache()
 
 	patterns := []string{
 		`^test_\w+$`,
@@ -121,31 +117,30 @@ func TestCompileRegexMultiplePatterns(t *testing.T) {
 
 	// Compile all patterns
 	for i, pattern := range patterns {
-		re, err := compileRegex(pattern)
+		re, err := util.CompileRegex(pattern)
 		if err != nil {
 			t.Fatalf("Compile failed for pattern %s: %v", pattern, err)
 		}
 		compiled[i] = re
 	}
 
-	// Verify all are cached
-	for i, pattern := range patterns {
-		cached, ok := regexCache.Load(pattern)
-		if !ok {
-			t.Errorf("Pattern %s not in cache", pattern)
-		}
-
-		if cached.(*regexp.Regexp) != compiled[i] {
-			t.Errorf("Cached regex for %s doesn't match compiled version", pattern)
-		}
-	}
-
-	// All should be different objects
+	// All should be different objects (different patterns)
 	for i := 0; i < len(compiled); i++ {
 		for j := i + 1; j < len(compiled); j++ {
 			if compiled[i] == compiled[j] {
 				t.Errorf("Pattern %d and %d have same regex object", i, j)
 			}
+		}
+	}
+
+	// Re-compile should return cached versions
+	for i, pattern := range patterns {
+		re, err := util.CompileRegex(pattern)
+		if err != nil {
+			t.Fatalf("Re-compile failed for pattern %s: %v", pattern, err)
+		}
+		if re != compiled[i] {
+			t.Errorf("Pattern %s was not cached properly", pattern)
 		}
 	}
 }
@@ -163,23 +158,23 @@ func BenchmarkCompileRegex_Uncached(b *testing.B) {
 // BenchmarkCompileRegex_Cached benchmarks regex compilation with caching.
 func BenchmarkCompileRegex_Cached(b *testing.B) {
 	// Clear cache
-	regexCache = sync.Map{}
+	util.ClearRegexCache()
 
 	pattern := `^\w+_[0-9]{3,5}_[a-zA-Z]+$`
 
 	// Pre-populate cache
-	_, _ = compileRegex(pattern)
+	_, _ = util.CompileRegex(pattern)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _ = compileRegex(pattern)
+		_, _ = util.CompileRegex(pattern)
 	}
 }
 
 // BenchmarkCompileRegex_MixedPatterns benchmarks realistic workload with multiple patterns.
 func BenchmarkCompileRegex_MixedPatterns(b *testing.B) {
 	// Clear cache
-	regexCache = sync.Map{}
+	util.ClearRegexCache()
 
 	patterns := []string{
 		`^test_\w+$`,
@@ -193,6 +188,6 @@ func BenchmarkCompileRegex_MixedPatterns(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		// Simulate realistic access pattern
 		pattern := patterns[i%len(patterns)]
-		_, _ = compileRegex(pattern)
+		_, _ = util.CompileRegex(pattern)
 	}
 }

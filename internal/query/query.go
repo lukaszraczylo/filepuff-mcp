@@ -6,36 +6,12 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-	"sync"
 
 	"github.com/lukaszraczylo/mcp-filepuff/internal/parser"
+	"github.com/lukaszraczylo/mcp-filepuff/internal/util"
 	"github.com/lukaszraczylo/mcp-filepuff/pkg/protocol"
 	sitter "github.com/smacker/go-tree-sitter"
 )
-
-// Global regex cache for compiled patterns (thread-safe)
-var regexCache sync.Map // string -> *regexp.Regexp
-
-// compileRegex compiles a regex pattern with caching for performance.
-// Cached patterns avoid repeated compilation overhead (10-50x speedup).
-// Thread-safe: uses LoadOrStore to prevent race conditions.
-func compileRegex(pattern string) (*regexp.Regexp, error) {
-	// Check cache first
-	if cached, ok := regexCache.Load(pattern); ok {
-		return cached.(*regexp.Regexp), nil
-	}
-
-	// Compile regex
-	re, err := regexp.Compile(pattern)
-	if err != nil {
-		return nil, err
-	}
-
-	// Try to store - if another goroutine already stored it, use theirs
-	// This prevents race conditions where multiple goroutines compile the same pattern
-	actual, _ := regexCache.LoadOrStore(pattern, re)
-	return actual.(*regexp.Regexp), nil
-}
 
 // ASTQuery defines a query for matching AST patterns.
 type ASTQuery struct {
@@ -438,7 +414,7 @@ func passesFilters(node *sitter.Node, filters QueryFilters, content []byte) bool
 			return false
 		}
 		name := parser.GetNodeText(nameNode, content)
-		re, err := compileRegex(filters.NameMatches)
+		re, err := util.CompileRegex(filters.NameMatches)
 		if err != nil {
 			return false
 		}

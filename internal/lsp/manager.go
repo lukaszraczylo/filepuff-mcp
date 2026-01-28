@@ -153,19 +153,29 @@ func (m *Manager) GetServer(ctx context.Context, lang protocol.Language) (*Manag
 		openDocs: make(map[string]int),
 	}
 
+	// Setup cleanup on failure - ensures resources are freed if initialization fails
+	var initialized bool
+	defer func() {
+		if !initialized {
+			_ = client.Close()
+			// Ensure process is killed on initialization failure
+			if cmd.Process != nil {
+				_ = cmd.Process.Kill()
+			}
+		}
+	}()
+
 	// Initialize server
 	if err := m.initializeServer(ctx, newSrv); err != nil {
-		_ = client.Close()
-		// Ensure process is killed on initialization failure
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
-		}
 		newSrv.initErr = err
 		return nil, errors.Wrap(errors.ErrLSPInitFailed, "LSP server initialization failed", err).
 			WithContext("language", string(lang)).
 			WithContext("command", config.Command[0]).
 			WithRemediation("Check LSP server logs for initialization errors")
 	}
+
+	// Mark as successfully initialized to prevent cleanup
+	initialized = true
 
 	newSrv.ready = true
 	m.servers[lang] = newSrv

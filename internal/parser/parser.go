@@ -5,6 +5,8 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/cespare/xxhash/v2"
 	lru "github.com/hashicorp/golang-lru/v2"
@@ -22,14 +24,25 @@ import (
 	"github.com/lukaszraczylo/mcp-filepuff/pkg/protocol"
 )
 
-// MaxFileSize is the maximum file size we'll parse (10MB).
+// MaxFileSize is the default maximum file size we'll parse (10MB).
+// Deprecated: Use Registry.maxParseSize instead.
 const MaxFileSize = 10 * 1024 * 1024
 
 // Registry manages Tree-sitter parsers for different languages.
 type Registry struct {
-	parsers map[protocol.Language]*sitter.Parser
-	cache   *lru.Cache[string, *CachedTree]
-	mu      sync.RWMutex
+	parsers      map[protocol.Language]*sitter.Parser
+	cache        *lru.Cache[string, *CachedTree]
+	maxParseSize int64
+	mu           sync.RWMutex
+
+	// Cache metrics (atomic for thread-safety)
+	cacheHits   atomic.Int64
+	cacheMisses atomic.Int64
+
+	// Parse duration tracking
+	totalParseTime    atomic.Int64 // nanoseconds
+	parseCount        atomic.Int64
+	lastParseDuration atomic.Int64 // nanoseconds
 }
 
 // CachedTree stores a parsed tree with its metadata.
@@ -54,8 +67,27 @@ type SyntaxError struct {
 	Location protocol.Location
 }
 
-// NewRegistry creates a new parser registry.
+// CacheStatsResult contains cache statistics.
+type CacheStatsResult struct {
+	Hits           int64   `json:"hits"`
+	Misses         int64   `json:"misses"`
+	HitRate        float64 `json:"hit_rate"`
+	Size           int     `json:"size"`
+	TotalParseTime int64   `json:"total_parse_time_ns"`
+	ParseCount     int64   `json:"parse_count"`
+	AvgParseTime   int64   `json:"avg_parse_time_ns"`
+	LastParseTime  int64   `json:"last_parse_time_ns"`
+}
+
+// NewRegistry creates a new parser registry with the default max parse size.
+// For custom max parse size, use NewRegistryWithSize.
 func NewRegistry() *Registry {
+	return NewRegistryWithSize(0)
+}
+
+// NewRegistryWithSize creates a new parser registry with the specified max parse size.
+// If maxParseSize is 0 or negative, uses the default MaxFileSize constant.
+func NewRegistryWithSize(maxParseSize int64) *Registry {
 	// Create LRU cache with capacity of 100 trees
 	cache, err := lru.New[string, *CachedTree](100)
 	if err != nil {
@@ -63,9 +95,14 @@ func NewRegistry() *Registry {
 		panic(fmt.Sprintf("failed to create LRU cache: %v", err))
 	}
 
+	if maxParseSize <= 0 {
+		maxParseSize = MaxFileSize
+	}
+
 	return &Registry{
-		parsers: make(map[protocol.Language]*sitter.Parser),
-		cache:   cache,
+		parsers:      make(map[protocol.Language]*sitter.Parser),
+		cache:        cache,
+		maxParseSize: maxParseSize,
 	}
 }
 
@@ -130,9 +167,9 @@ func (r *Registry) GetParser(lang protocol.Language) (*sitter.Parser, error) {
 
 // Parse parses the given content for the specified language.
 func (r *Registry) Parse(ctx context.Context, filename string, content []byte) (*ParseResult, error) {
-	// Check file size
-	if len(content) > MaxFileSize {
-		return nil, errors.NewFileTooLarge(filename, int64(len(content)), MaxFileSize)
+	// Check file size against configured limit
+	if int64(len(content)) > r.maxParseSize {
+		return nil, errors.NewFileTooLarge(filename, int64(len(content)), r.maxParseSize)
 	}
 
 	// Detect binary files
@@ -161,6 +198,7 @@ func (r *Registry) Parse(ctx context.Context, filename string, content []byte) (
 	// Check cache (LRU cache is thread-safe)
 	hash := contentHash(content)
 	if cached, ok := r.cache.Get(hash); ok && cached.Language == lang {
+		r.cacheHits.Add(1)
 		errors := extractErrors(cached.Tree.RootNode(), content)
 		return &ParseResult{
 			Tree:     cached.Tree,
@@ -169,6 +207,7 @@ func (r *Registry) Parse(ctx context.Context, filename string, content []byte) (
 			Content:  content,
 		}, nil
 	}
+	r.cacheMisses.Add(1)
 
 	// Get parser
 	parser, err := r.GetParser(lang)
@@ -178,9 +217,17 @@ func (r *Registry) Parse(ctx context.Context, filename string, content []byte) (
 
 	// Parse content - tree-sitter parsers are not thread-safe,
 	// so we need to hold the lock during parsing
+	// Track parse duration
+	start := time.Now()
 	r.mu.Lock()
 	tree, err := parser.ParseCtx(ctx, nil, content)
 	r.mu.Unlock()
+	duration := time.Since(start)
+
+	// Update duration metrics
+	r.totalParseTime.Add(duration.Nanoseconds())
+	r.parseCount.Add(1)
+	r.lastParseDuration.Store(duration.Nanoseconds())
 
 	if err != nil {
 		return nil, errors.NewParseError(string(lang), filename, err)
@@ -201,6 +248,50 @@ func (r *Registry) Parse(ctx context.Context, filename string, content []byte) (
 		Errors:   errors,
 		Content:  content,
 	}, nil
+}
+
+// CacheStats returns cache hit/miss statistics.
+func (r *Registry) CacheStats() (hits, misses int64) {
+	return r.cacheHits.Load(), r.cacheMisses.Load()
+}
+
+// CacheStatsDetailed returns detailed cache and parse statistics.
+func (r *Registry) CacheStatsDetailed() CacheStatsResult {
+	hits := r.cacheHits.Load()
+	misses := r.cacheMisses.Load()
+	totalParseTime := r.totalParseTime.Load()
+	parseCount := r.parseCount.Load()
+
+	var hitRate float64
+	total := hits + misses
+	if total > 0 {
+		hitRate = float64(hits) / float64(total)
+	}
+
+	var avgParseTime int64
+	if parseCount > 0 {
+		avgParseTime = totalParseTime / parseCount
+	}
+
+	return CacheStatsResult{
+		Hits:           hits,
+		Misses:         misses,
+		HitRate:        hitRate,
+		Size:           r.cache.Len(),
+		TotalParseTime: totalParseTime,
+		ParseCount:     parseCount,
+		AvgParseTime:   avgParseTime,
+		LastParseTime:  r.lastParseDuration.Load(),
+	}
+}
+
+// ResetStats resets all cache and parse statistics.
+func (r *Registry) ResetStats() {
+	r.cacheHits.Store(0)
+	r.cacheMisses.Store(0)
+	r.totalParseTime.Store(0)
+	r.parseCount.Store(0)
+	r.lastParseDuration.Store(0)
 }
 
 // extractErrors finds all error nodes in the tree.

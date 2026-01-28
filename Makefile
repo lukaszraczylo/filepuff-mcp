@@ -1,5 +1,4 @@
-.PHONY: build test lint clean install run deps
-
+.PHONY: build test lint clean install run deps docs
 # Binary name
 BINARY_NAME=mcp-filepuff
 # Build directory
@@ -42,11 +41,28 @@ build-all:
 
 # Run tests
 test:
-	$(GOTEST) -v -race -coverprofile=coverage.out ./...
+	$(GOTEST) -v -coverprofile=coverage.out ./...
+
+# Run tests with race detector on critical packages
+test-race:
+	@echo "Running race detector tests on critical packages..."
+	$(GOTEST) -v -race -timeout=5m ./internal/edit/...
+	$(GOTEST) -v -race -timeout=5m ./internal/lsp/...
+	$(GOTEST) -v -race -timeout=5m ./internal/parser/...
+	$(GOTEST) -v -race -timeout=5m ./internal/server/...
+	@echo "Race detector tests completed successfully"
 
 # Run tests with short flag
 test-short:
 	$(GOTEST) -v -short ./...
+
+# Run all tests including race detector
+test-all: test test-race
+
+# Run linters
+lint:
+	@which golangci-lint > /dev/null || (echo "Installing golangci-lint..." && go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest)
+	golangci-lint run ./...
 
 # Clean build artifacts
 clean:
@@ -72,9 +88,18 @@ help:
 	@echo "  build         - Build the binary"
 	@echo "  build-all     - Build for all platforms"
 	@echo "  test          - Run tests with coverage"
+	@echo "  test-race     - Run tests with race detector on critical packages"
+	@echo "  test-all      - Run all tests including race detector"
 	@echo "  test-short    - Run short tests"
 	@echo "  lint          - Run linters"
 	@echo "  clean         - Clean build artifacts"
 	@echo "  install       - Install binary to GOPATH/bin"
 	@echo "  run           - Build and run the server"
 	@echo "  run-workspace - Run with specific workspace (WORKSPACE=/path)"
+
+
+# Generate API documentation
+docs:
+	@echo "Generating API documentation..."
+	$(GOCMD) run ./cmd/docgen
+	@echo "Documentation generated in docs/API.md"

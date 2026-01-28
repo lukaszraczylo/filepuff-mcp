@@ -6,36 +6,16 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"regexp"
 	"strings"
 	"sync"
 
 	"github.com/lukaszraczylo/mcp-filepuff/internal/parser"
+	"github.com/lukaszraczylo/mcp-filepuff/internal/util"
 	"github.com/lukaszraczylo/mcp-filepuff/pkg/errors"
 	"github.com/lukaszraczylo/mcp-filepuff/pkg/protocol"
 	"github.com/sergi/go-diff/diffmatchpatch"
 	sitter "github.com/smacker/go-tree-sitter"
 )
-
-// Global regex cache for compiled patterns (thread-safe)
-var regexCache sync.Map // string -> *regexp.Regexp
-
-// compileRegex compiles a regex pattern with caching for performance.
-func compileRegex(pattern string) (*regexp.Regexp, error) {
-	// Check cache first
-	if cached, ok := regexCache.Load(pattern); ok {
-		return cached.(*regexp.Regexp), nil
-	}
-
-	// Compile and cache
-	re, err := regexp.Compile(pattern)
-	if err != nil {
-		return nil, err
-	}
-
-	regexCache.Store(pattern, re)
-	return re, nil
-}
 
 // EditOperation defines the type of edit operation.
 type EditOperation string
@@ -198,7 +178,14 @@ func (e *Engine) performASTEdit(ctx context.Context, edit *ASTEdit, apply bool) 
 
 	// Apply changes if requested
 	if apply {
-		if err := os.WriteFile(edit.File, newContent, 0600); err != nil {
+		// Preserve original file permissions
+		fileInfo, err := os.Stat(edit.File)
+		perm := os.FileMode(0o600) // default fallback
+		if err == nil {
+			perm = fileInfo.Mode().Perm()
+		}
+
+		if err := os.WriteFile(edit.File, newContent, perm); err != nil {
 			structuredErr := errors.NewFileNotWritableError(edit.File, err)
 			return &EditResult{
 				Success: false,
@@ -250,7 +237,14 @@ func (e *Engine) performTextEdit(_ context.Context, edit *ASTEdit, apply bool) (
 
 	// Apply changes if requested
 	if apply {
-		if err := os.WriteFile(edit.File, newContent, 0600); err != nil {
+		// Preserve original file permissions
+		fileInfo, err := os.Stat(edit.File)
+		perm := os.FileMode(0o600) // default fallback
+		if err == nil {
+			perm = fileInfo.Mode().Perm()
+		}
+
+		if err := os.WriteFile(edit.File, newContent, perm); err != nil {
 			structuredErr := errors.NewFileNotWritableError(edit.File, err)
 			return &EditResult{
 				Success: false,
@@ -319,7 +313,7 @@ func (e *Engine) validateTextEdit(edit *ASTEdit) error {
 
 	// Validate regex pattern if provided (uses cached compilation)
 	if edit.Selector.TextPattern != "" {
-		if _, err := compileRegex(edit.Selector.TextPattern); err != nil {
+		if _, err := util.CompileRegex(edit.Selector.TextPattern); err != nil {
 			return errors.Wrap(errors.ErrInvalidEdit, "invalid text_pattern regex", err)
 		}
 	}
@@ -672,7 +666,7 @@ func (e *Engine) findExactText(content []byte, text string, index int) (start, e
 
 // findRegexPattern finds a regex pattern match in content.
 func (e *Engine) findRegexPattern(content []byte, pattern string, index int) (start, end int, err error) {
-	re, err := compileRegex(pattern)
+	re, err := util.CompileRegex(pattern)
 	if err != nil {
 		return 0, 0, errors.Wrap(errors.ErrInvalidEdit, "invalid regex pattern", err)
 	}

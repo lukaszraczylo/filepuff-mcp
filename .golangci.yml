@@ -1,0 +1,44 @@
+version: "2"
+
+run:
+  timeout: 5m
+  go: '1.25'
+
+linters:
+  enable:
+    - errcheck      # Check for unchecked errors
+    - govet         # Vet examines Go source code
+    - ineffassign   # Detect ineffectual assignments
+    - staticcheck   # Advanced static analysis (includes gosimple)
+    - unused        # Check for unused code
+    - gocyclo       # Check cyclomatic complexity
+    - misspell      # Check for misspelled words
+
+formatters:
+  enable:
+    - gofmt         # Check formatting
+
+linters-settings:
+  gocyclo:
+    min-complexity: 15
+  errcheck:
+    check-blank: true
+  govet:
+    enable-all: true
+  staticcheck:
+    checks: ["all"]
+
+issues:
+  exclude-rules:
+    # Exclude some linters from running on tests
+    - path: _test\.go
+      linters:
+        - gocyclo
+        - errcheck
+        - gosec
+
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+output:
+  sort-results: true
