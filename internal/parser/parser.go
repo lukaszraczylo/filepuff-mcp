@@ -34,6 +34,8 @@ type Registry struct {
 	cache        *lru.Cache[string, *CachedTree]
 	maxParseSize int64
 	mu           sync.RWMutex
+	parserMu     sync.Map // per-language mutexes for parse serialization
+	closed       bool     // Indicates if the registry has been closed
 
 	// Cache metrics (atomic for thread-safety)
 	cacheHits   atomic.Int64
@@ -136,8 +138,13 @@ func getLanguage(lang protocol.Language) (*sitter.Language, error) {
 }
 
 // GetParser returns a parser for the given language.
+// Returns an error if the registry has been closed.
 func (r *Registry) GetParser(lang protocol.Language) (*sitter.Parser, error) {
 	r.mu.RLock()
+	if r.closed {
+		r.mu.RUnlock()
+		return nil, errors.New(errors.ErrInternal, "parser registry is closed")
+	}
 	if p, ok := r.parsers[lang]; ok {
 		r.mu.RUnlock()
 		return p, nil
@@ -147,6 +154,11 @@ func (r *Registry) GetParser(lang protocol.Language) (*sitter.Parser, error) {
 	// Create new parser
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	// Check closed again after acquiring write lock
+	if r.closed {
+		return nil, errors.New(errors.ErrInternal, "parser registry is closed")
+	}
 
 	// Double-check after acquiring write lock
 	if p, ok := r.parsers[lang]; ok {
@@ -196,7 +208,8 @@ func (r *Registry) Parse(ctx context.Context, filename string, content []byte) (
 	}
 
 	// Check cache (LRU cache is thread-safe)
-	hash := contentHash(content)
+	// Include language in cache key to prevent cross-language collisions
+	hash := fmt.Sprintf("%s:%016x", string(lang), xxhash.Sum64(content))
 	if cached, ok := r.cache.Get(hash); ok && cached.Language == lang {
 		r.cacheHits.Add(1)
 		errors := extractErrors(cached.Tree.RootNode(), content)
@@ -215,13 +228,16 @@ func (r *Registry) Parse(ctx context.Context, filename string, content []byte) (
 		return nil, err
 	}
 
-	// Parse content - tree-sitter parsers are not thread-safe,
-	// so we need to hold the lock during parsing
-	// Track parse duration
+	// Parse content - tree-sitter parsers are not thread-safe per instance,
+	// but parsers for different languages are independent.
+	// Use per-language locks to allow concurrent parsing of different languages.
+	muVal, _ := r.parserMu.LoadOrStore(lang, &sync.Mutex{})
+	langMu := muVal.(*sync.Mutex)
+
 	start := time.Now()
-	r.mu.Lock()
+	langMu.Lock()
 	tree, err := parser.ParseCtx(ctx, nil, content)
-	r.mu.Unlock()
+	langMu.Unlock()
 	duration := time.Since(start)
 
 	// Update duration metrics
@@ -351,9 +367,13 @@ func isBinary(content []byte) bool {
 }
 
 // Close closes all parsers and clears the cache.
+// After Close is called, the registry cannot be used for parsing.
 func (r *Registry) Close() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	// Mark as closed first to prevent new parse operations
+	r.closed = true
 
 	for _, p := range r.parsers {
 		p.Close()

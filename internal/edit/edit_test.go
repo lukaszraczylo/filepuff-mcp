@@ -357,7 +357,7 @@ func TestDetectIndentation(t *testing.T) {
 		name    string
 		content string
 		want    string
-		pos     uint32
+		pos     int
 	}{
 		{
 			name:    "no indent",
@@ -407,6 +407,71 @@ func TestGenerateDiff(t *testing.T) {
 	}
 	if !strings.Contains(diff, "+modified") {
 		t.Error("diff should show added line")
+	}
+}
+
+func TestGenerateDiffLineLevelAccuracy(t *testing.T) {
+	// Regression test: diff must operate at line level, not character level.
+	// A character-level diff would split "hello" and "hello world" mid-line,
+	// producing broken output like:
+	//   fmt.Println("hello
+	//   + world
+	//   ")
+	original := "package main\n\nfunc hello() {\n\tfmt.Println(\"hello\")\n}\n"
+	modified := "package main\n\nfunc hello() {\n\tfmt.Println(\"hello world\")\n}\n"
+
+	diff := generateDiff(original, modified, "test.go")
+
+	// The diff must show whole-line removals and additions
+	if !strings.Contains(diff, "-\tfmt.Println(\"hello\")\n") {
+		t.Errorf("diff should show full removed line, got:\n%s", diff)
+	}
+	if !strings.Contains(diff, "+\tfmt.Println(\"hello world\")\n") {
+		t.Errorf("diff should show full added line, got:\n%s", diff)
+	}
+
+	// The diff must NOT split lines at character boundaries
+	if strings.Contains(diff, "+hello") && !strings.Contains(diff, "Println") {
+		t.Errorf("diff appears to be character-level (split mid-line), got:\n%s", diff)
+	}
+
+	// Context lines should not be marked as changed
+	for line := range strings.SplitSeq(diff, "\n") {
+		if strings.HasPrefix(line, "-") || strings.HasPrefix(line, "+") {
+			// Changed lines should only be the Println lines
+			if strings.Contains(line, "package main") ||
+				strings.Contains(line, "func hello()") {
+				t.Errorf("unchanged line incorrectly marked as changed: %q", line)
+			}
+		}
+	}
+}
+
+func TestGenerateDiffNoPhantomChanges(t *testing.T) {
+	// Regression test: replacing a line range should not produce phantom
+	// +/- lines for unchanged code after the edit region.
+	original := "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\n"
+	modified := "line1\nREPLACED\nline3\nline4\nline5\nline6\nline7\nline8\n"
+
+	diff := generateDiff(original, modified, "test.txt")
+
+	// Count changed lines (excluding headers)
+	addCount := 0
+	delCount := 0
+	for line := range strings.SplitSeq(diff, "\n") {
+		if strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++") {
+			addCount++
+		}
+		if strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---") {
+			delCount++
+		}
+	}
+
+	if addCount != 1 {
+		t.Errorf("expected 1 added line, got %d. Diff:\n%s", addCount, diff)
+	}
+	if delCount != 1 {
+		t.Errorf("expected 1 deleted line, got %d. Diff:\n%s", delCount, diff)
 	}
 }
 
@@ -593,7 +658,7 @@ SECRET_KEY=abc123
 	}
 }
 
-func TestTextEditMultipleMatchesError(t *testing.T) {
+func TestTextEditMultipleMatchesSelectsFirst(t *testing.T) {
 	registry := parser.NewRegistry()
 	defer registry.Close()
 	e := NewEngine(registry)
@@ -624,12 +689,19 @@ more code
 		t.Fatalf("apply failed: %v", err)
 	}
 
-	// Should fail because of multiple matches
-	if result.Success {
-		t.Error("expected error for multiple matches without index")
+	// Index 0 (default) should select the first match
+	if !result.Success {
+		t.Fatalf("expected success for multiple matches with default index 0: %s", result.Error)
 	}
-	if !strings.Contains(result.Error, "matches") {
-		t.Errorf("error should mention multiple matches: %s", result.Error)
+
+	// Verify only first TODO was replaced
+	fileContent, _ := os.ReadFile(tmpFile)
+	contentStr := string(fileContent)
+	if !strings.Contains(contentStr, "DONE: fix this") {
+		t.Error("first TODO should be replaced with DONE")
+	}
+	if !strings.Contains(contentStr, "TODO: also fix this") {
+		t.Error("second TODO should be unchanged")
 	}
 }
 

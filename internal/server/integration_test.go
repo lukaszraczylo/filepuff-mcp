@@ -52,6 +52,7 @@ func Hello() string {
 		}
 		if result == nil {
 			t.Fatal("handlePing() returned nil")
+			return
 		}
 		if len(result.Content) == 0 {
 			t.Fatal("handlePing() returned empty content")
@@ -70,6 +71,7 @@ func Hello() string {
 		}
 		if result == nil {
 			t.Fatal("handleFileRead() returned nil")
+			return
 		}
 		if len(result.Content) == 0 {
 			t.Fatal("handleFileRead() returned empty content")
@@ -90,6 +92,7 @@ func Hello() string {
 		}
 		if result == nil {
 			t.Fatal("handleASTQuery() returned nil")
+			return
 		}
 	})
 
@@ -110,6 +113,7 @@ func Hello() string {
 		}
 		if previewResult == nil {
 			t.Fatal("handleEditPreview() returned nil")
+			return
 		}
 
 		// Verify file unchanged after preview
@@ -127,6 +131,7 @@ func Hello() string {
 		}
 		if applyResult == nil {
 			t.Fatal("handleEditApply() returned nil")
+			return
 		}
 
 		// Verify file changed after apply
@@ -352,6 +357,7 @@ func Add(a, b int) int {
 		}
 		if readResult == nil {
 			t.Fatal("handleFileRead() returned nil")
+			return
 		}
 
 		// 2. Query AST
@@ -367,6 +373,7 @@ func Add(a, b int) int {
 		}
 		if queryResult == nil {
 			t.Fatal("handleASTQuery() returned nil")
+			return
 		}
 
 		// 3. Preview edit
@@ -384,6 +391,7 @@ func Add(a, b int) int {
 		}
 		if editResult == nil {
 			t.Fatal("handleEditPreview() returned nil")
+			return
 		}
 	})
 }

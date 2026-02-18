@@ -16,6 +16,12 @@ import (
 	json "github.com/goccy/go-json"
 )
 
+// ProcessKillTimeout is the timeout for waiting for a process to exit before force killing.
+const ProcessKillTimeout = 5 * time.Second
+
+// StderrBufferSize is the buffer size for draining stderr.
+const StderrBufferSize = 1024
+
 // Client represents an LSP client connection.
 type Client struct {
 	stdin         io.WriteCloser
@@ -104,10 +110,31 @@ func NewClient(cmd *exec.Cmd) (*Client, error) {
 		notifications: make(chan *Notification, 100),
 	}
 
-	// Start reader goroutine
+	// Start reader goroutine for stdout
 	go c.readLoop()
 
+	// Start stderr drain goroutine to prevent pipe buffer from filling up
+	go c.drainStderr()
+
 	return c, nil
+}
+
+// drainStderr consumes stderr output to prevent the LSP server from blocking.
+// LSP servers may write diagnostic messages to stderr which we discard.
+func (c *Client) drainStderr() {
+	buf := make([]byte, StderrBufferSize)
+	for {
+		select {
+		case <-c.done:
+			return
+		default:
+		}
+		// Read and discard stderr output
+		_, err := c.stderr.Read(buf)
+		if err != nil {
+			return
+		}
+	}
 }
 
 // Call sends a request and waits for a response.
@@ -208,7 +235,7 @@ func (c *Client) Close() error {
 		select {
 		case <-done:
 			// Clean exit
-		case <-time.After(5 * time.Second):
+		case <-time.After(ProcessKillTimeout):
 			// Force kill
 			_ = c.cmd.Process.Kill()
 		}

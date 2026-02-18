@@ -2,14 +2,10 @@
 package server
 
 import (
-	"bufio"
 	"context"
-	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
-	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
@@ -19,10 +15,21 @@ import (
 	"github.com/lukaszraczylo/mcp-filepuff/internal/parser"
 	"github.com/lukaszraczylo/mcp-filepuff/internal/query"
 	"github.com/lukaszraczylo/mcp-filepuff/internal/search"
-	"github.com/lukaszraczylo/mcp-filepuff/pkg/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
+
+// MaxConcurrentReads limits concurrent file read operations to prevent memory exhaustion.
+const MaxConcurrentReads = 10
+
+// MaxConcurrentQueries limits concurrent AST query operations to prevent CPU exhaustion.
+const MaxConcurrentQueries = 5
+
+// ServerShutdownTimeout is the timeout for graceful server shutdown.
+const ServerShutdownTimeout = 10 * time.Second
+
+// PreviewLineMaxLength is the maximum length for preview lines before truncation.
+const PreviewLineMaxLength = 100
 
 // Server represents the MCP file operations server.
 type Server struct {
@@ -34,17 +41,21 @@ type Server struct {
 	matcher    *query.Matcher
 	lspManager *lsp.Manager
 	editor     *edit.Engine
+	readSem    chan struct{} // Semaphore for limiting concurrent file reads
+	querySem   chan struct{} // Semaphore for limiting concurrent AST queries
 }
 
 // New creates a new MCP server instance.
 func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
 	parserRegistry := parser.NewRegistryWithSize(cfg.MaxParseSize)
 	s := &Server{
-		cfg:     cfg,
-		logger:  logger,
-		parser:  parserRegistry,
-		matcher: query.NewMatcher(parserRegistry),
-		editor:  edit.NewEngine(parserRegistry),
+		cfg:      cfg,
+		logger:   logger,
+		parser:   parserRegistry,
+		matcher:  query.NewMatcher(parserRegistry),
+		editor:   edit.NewEngine(parserRegistry),
+		readSem:  make(chan struct{}, MaxConcurrentReads),
+		querySem: make(chan struct{}, MaxConcurrentQueries),
 	}
 
 	// Initialize searcher
@@ -341,644 +352,6 @@ func (s *Server) handlePing(ctx context.Context, request mcp.CallToolRequest) (*
 	return mcp.NewToolResultText("pong"), nil
 }
 
-// handleFileSearch handles the file_search tool.
-func (s *Server) handleFileSearch(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	start := time.Now()
-	defer func() {
-		s.logger.Debug("file_search completed",
-			"duration_ms", time.Since(start).Milliseconds(),
-		)
-	}()
-
-	if s.searcher == nil {
-		return mcp.NewToolResultError("ripgrep (rg) is not available. Please install it: https://github.com/BurntSushi/ripgrep#installation"), nil
-	}
-
-	// Parse request arguments using SDK helpers
-	pattern, err := request.RequireString("pattern")
-	if err != nil {
-		return mcp.NewToolResultError("pattern is required"), nil
-	}
-
-	req := &search.Request{
-		Pattern:      pattern,
-		Paths:        request.GetStringSlice("paths", nil),
-		FileTypes:    request.GetStringSlice("file_types", nil),
-		IgnoreCase:   request.GetBool("ignore_case", false),
-		Regex:        request.GetBool("regex", true),
-		ContextLines: request.GetInt("context_lines", 2),
-		MaxResults:   request.GetInt("max_results", 0),
-	}
-
-	// Execute search
-	results, err := s.searcher.Search(ctx, req)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("search error: %v", err)), nil
-	}
-
-	s.logger.Info("search completed",
-		"pattern", pattern,
-		"results_count", len(results.Results),
-		"truncated", results.Truncated,
-	)
-
-	// Format results
-	output := s.searcher.FormatResults(results)
-	return mcp.NewToolResultText(output), nil
-}
-
-// handleFileRead handles the file_read tool.
-func (s *Server) handleFileRead(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	path, err := request.RequireString("path")
-	if err != nil {
-		return mcp.NewToolResultError("path is required"), nil
-	}
-
-	// Validate path is within workspace
-	if !s.cfg.IsPathAllowed(path) {
-		return mcp.NewToolResultError("path is outside workspace root"), nil
-	}
-
-	// Read file
-	content, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return mcp.NewToolResultError(fmt.Sprintf("file not found: %s", path)), nil
-		}
-		if os.IsPermission(err) {
-			return mcp.NewToolResultError(fmt.Sprintf("permission denied: %s", path)), nil
-		}
-		return mcp.NewToolResultError(fmt.Sprintf("error reading file: %v", err)), nil
-	}
-
-	// Check file size
-	if int64(len(content)) > s.cfg.MaxFileSize {
-		return mcp.NewToolResultError(fmt.Sprintf("file too large (%d bytes, max %d)", len(content), s.cfg.MaxFileSize)), nil
-	}
-
-	// Handle line range
-	lines := splitLines(string(content))
-	lineStart := request.GetInt("line_start", 1)
-	lineEnd := request.GetInt("line_end", len(lines))
-
-	// Clamp to valid range
-	if lineStart < 1 {
-		lineStart = 1
-	}
-	if lineEnd > len(lines) {
-		lineEnd = len(lines)
-	}
-	if lineStart > lineEnd {
-		lineStart = lineEnd
-	}
-
-	var output strings.Builder
-
-	// Include AST summary if requested
-	includeAST := request.GetBool("include_ast", false)
-	symbolsOnly := request.GetBool("symbols_only", false)
-	maxLines := request.GetInt("max_lines", 0)
-
-	// Validate symbols_only requires include_ast
-	if symbolsOnly && !includeAST {
-		return mcp.NewToolResultError("symbols_only requires include_ast=true"), nil
-	}
-
-	if includeAST {
-		astSummary := s.generateASTSummary(ctx, path, content)
-		if astSummary != "" {
-			output.WriteString(astSummary)
-			if !symbolsOnly {
-				output.WriteString("\n---\n\n")
-			}
-		}
-	}
-
-	// Skip file content if symbols_only mode
-	if !symbolsOnly {
-		// Apply max_lines limit if specified
-		effectiveEnd := lineEnd
-		if maxLines > 0 && (lineEnd-lineStart+1) > maxLines {
-			effectiveEnd = lineStart + maxLines - 1
-			if effectiveEnd < lineEnd {
-				// Add note that output was truncated
-				defer func() {
-					output.WriteString(fmt.Sprintf("\n[... %d more lines omitted for token efficiency. Use line_start/line_end or increase max_lines to see more]\n", lineEnd-effectiveEnd))
-				}()
-			}
-		}
-
-		// Extract requested lines
-		for i := lineStart - 1; i < effectiveEnd && i < len(lines); i++ {
-			output.WriteString(fmt.Sprintf("%4d│ %s\n", i+1, lines[i]))
-		}
-	}
-
-	return mcp.NewToolResultText(output.String()), nil
-}
-
-// generateASTSummary generates a summary of symbols in the file.
-func (s *Server) generateASTSummary(ctx context.Context, path string, content []byte) string {
-	// Parse the file
-	result, err := s.parser.Parse(ctx, path, content)
-	if err != nil {
-		return "" // Silently skip AST if parsing fails
-	}
-
-	// Extract symbols
-	lang := protocol.DetectLanguage(path)
-	symbols := parser.ExtractSymbols(result.Tree, content, lang, path)
-	if len(symbols) == 0 {
-		return ""
-	}
-
-	var sb strings.Builder
-
-	// Get relative path
-	relPath := path
-	if absPath, err := filepath.Abs(path); err == nil {
-		if rel, err := filepath.Rel(s.cfg.WorkspaceRoot, absPath); err == nil && !strings.HasPrefix(rel, "..") {
-			relPath = rel
-		}
-	}
-
-	sb.WriteString(fmt.Sprintf("**%s** (%d lines, %s)\n\n", relPath, len(splitLines(string(content))), lang))
-	sb.WriteString("Symbols:\n")
-
-	for _, sym := range symbols {
-		kindStr := symbolKindIcon(sym.Kind)
-		sb.WriteString(fmt.Sprintf("  %s %s  L%d\n", kindStr, sym.Name, sym.Location.Line))
-	}
-
-	return sb.String()
-}
-
-// symbolKindIcon returns an icon/prefix for a symbol kind.
-func symbolKindIcon(kind protocol.SymbolKind) string {
-	switch kind {
-	case protocol.SymbolFunction:
-		return "func"
-	case protocol.SymbolMethod:
-		return "meth"
-	case protocol.SymbolClass:
-		return "class"
-	case protocol.SymbolStruct:
-		return "struct"
-	case protocol.SymbolInterface:
-		return "iface"
-	case protocol.SymbolVariable:
-		return "var"
-	case protocol.SymbolConstant:
-		return "const"
-	case protocol.SymbolType:
-		return "type"
-	case protocol.SymbolField:
-		return "field"
-	case protocol.SymbolProperty:
-		return "prop"
-	case protocol.SymbolModule:
-		return "mod"
-	case protocol.SymbolPackage:
-		return "pkg"
-	default:
-		return "sym"
-	}
-}
-
-func splitLines(s string) []string {
-	// For large files (> 1MB), use bufio.Scanner which is more memory efficient
-	// For smaller files, use simple string split which is faster
-	const largeSizeThreshold = 1024 * 1024 // 1MB
-
-	if len(s) > largeSizeThreshold {
-		// Use scanner for large files
-		scanner := bufio.NewScanner(strings.NewReader(s))
-		var lines []string
-		for scanner.Scan() {
-			lines = append(lines, scanner.Text())
-		}
-		// Handle potential error and add empty line if string ended with newline
-		if len(s) > 0 && s[len(s)-1] == '\n' {
-			lines = append(lines, "")
-		}
-		return lines
-	}
-
-	// Use optimized stdlib implementation for smaller files (2-3x faster than manual loop)
-	return strings.Split(s, "\n")
-}
-
-// handleASTQuery handles the ast_query tool.
-func (s *Server) handleASTQuery(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	pattern, err := request.RequireString("pattern")
-	if err != nil {
-		return mcp.NewToolResultError("pattern is required"), nil
-	}
-
-	language, err := request.RequireString("language")
-	if err != nil {
-		return mcp.NewToolResultError("language is required"), nil
-	}
-
-	// Build query
-	astQuery := &query.ASTQuery{
-		Pattern:  pattern,
-		Language: language,
-		Filters: query.QueryFilters{
-			NameMatches: request.GetString("name_matches", ""),
-			NameExact:   request.GetString("name_exact", ""),
-			KindIn:      request.GetStringSlice("kind_in", nil),
-		},
-	}
-
-	maxResults := request.GetInt("max_results", 100)
-	paths := request.GetStringSlice("paths", nil)
-
-	// Default to workspace root if no paths specified
-	if len(paths) == 0 {
-		paths = []string{s.cfg.WorkspaceRoot}
-	}
-
-	// Find files to search based on language
-	ext := languageToExtension(language)
-	if ext == "" {
-		return mcp.NewToolResultError(fmt.Sprintf("unsupported language: %s", language)), nil
-	}
-
-	var allResults []query.MatchResult
-
-	// Walk through paths and find matching files
-	for _, searchPath := range paths {
-		// Validate path is within workspace
-		if !s.cfg.IsPathAllowed(searchPath) {
-			continue
-		}
-
-		err := filepath.Walk(searchPath, func(path string, info os.FileInfo, err error) error {
-			// Check for context cancellation
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			default:
-			}
-
-			if err != nil {
-				return nil // Skip files with errors
-			}
-
-			if info.IsDir() {
-				// Skip hidden directories
-				if strings.HasPrefix(info.Name(), ".") {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-
-			// Check file extension matches language
-			if !strings.HasSuffix(path, ext) {
-				return nil
-			}
-
-			// Read and parse file
-			content, err := os.ReadFile(path)
-			if err != nil {
-				return nil // Skip unreadable files
-			}
-
-			// Check file size
-			if int64(len(content)) > s.cfg.MaxFileSize {
-				return nil // Skip large files
-			}
-
-			// Parse file
-			result, err := s.parser.Parse(ctx, path, content)
-			if err != nil {
-				return nil // Skip unparseable files
-			}
-
-			// Run query
-			matches, err := s.matcher.Match(ctx, astQuery, result.Tree, content, path)
-			if err != nil {
-				return nil // Skip on error
-			}
-
-			allResults = append(allResults, matches...)
-
-			// Stop if we have enough results
-			if maxResults > 0 && len(allResults) >= maxResults {
-				return filepath.SkipAll
-			}
-
-			return nil
-		})
-		if err != nil {
-			s.logger.Warn("error walking path", "path", searchPath, "error", err)
-		}
-	}
-
-	// Format and return results
-	output := query.FormatResults(allResults, maxResults)
-	return mcp.NewToolResultText(output), nil
-}
-
-// languageToExtension maps language names to file extensions.
-func languageToExtension(language string) string {
-	switch strings.ToLower(language) {
-	case "go":
-		return ".go"
-	case "typescript":
-		return ".ts"
-	case "javascript":
-		return ".js"
-	case "python":
-		return ".py"
-	case "c":
-		return ".c"
-	case "cpp", "c++":
-		return ".cpp"
-	case "elixir":
-		return ".ex"
-	default:
-		return ""
-	}
-}
-
-// handleSymbolAt handles the symbol_at tool.
-func (s *Server) handleSymbolAt(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	file, err := request.RequireString("file")
-	if err != nil {
-		return mcp.NewToolResultError("file is required"), nil
-	}
-
-	line := request.GetInt("line", 0)
-	if line <= 0 {
-		return mcp.NewToolResultError("line must be positive"), nil
-	}
-
-	col := request.GetInt("column", 0)
-	if col <= 0 {
-		return mcp.NewToolResultError("column must be positive"), nil
-	}
-
-	// Validate path
-	if !s.cfg.IsPathAllowed(file) {
-		return mcp.NewToolResultError("file is outside workspace root"), nil
-	}
-
-	// Try LSP hover
-	hover, err := s.lspManager.Hover(ctx, file, line, col)
-	if err != nil {
-		// Fall back to AST-based info
-		return s.handleSymbolAtFallback(ctx, file, line, col)
-	}
-
-	if hover == nil {
-		return mcp.NewToolResultText("No symbol information available at this position."), nil
-	}
-
-	var output strings.Builder
-	output.WriteString("**Symbol Information**\n\n")
-	output.WriteString(hover.Contents.Value)
-
-	return mcp.NewToolResultText(output.String()), nil
-}
-
-// handleSymbolAtFallback provides AST-based symbol info when LSP is unavailable.
-func (s *Server) handleSymbolAtFallback(ctx context.Context, file string, line, col int) (*mcp.CallToolResult, error) {
-	content, err := os.ReadFile(file)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to read file: %v", err)), nil
-	}
-
-	result, err := s.parser.Parse(ctx, file, content)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("failed to parse file: %v", err)), nil
-	}
-
-	node := parser.FindNodeAtPosition(result.Tree, line, col)
-	if node == nil {
-		return mcp.NewToolResultText("No symbol at this position."), nil
-	}
-
-	var output strings.Builder
-	output.WriteString("**Symbol Information** (AST fallback)\n\n")
-	output.WriteString(fmt.Sprintf("Node type: `%s`\n", node.Type()))
-	output.WriteString(fmt.Sprintf("Text: `%s`\n", parser.GetNodeText(node, content)))
-
-	return mcp.NewToolResultText(output.String()), nil
-}
-
-// handleFindDefinition handles the find_definition tool.
-func (s *Server) handleFindDefinition(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	file, err := request.RequireString("file")
-	if err != nil {
-		return mcp.NewToolResultError("file is required"), nil
-	}
-
-	line := request.GetInt("line", 0)
-	if line <= 0 {
-		return mcp.NewToolResultError("line must be positive"), nil
-	}
-
-	col := request.GetInt("column", 0)
-	if col <= 0 {
-		return mcp.NewToolResultError("column must be positive"), nil
-	}
-
-	// Validate path
-	if !s.cfg.IsPathAllowed(file) {
-		return mcp.NewToolResultError("file is outside workspace root"), nil
-	}
-
-	locations, err := s.lspManager.Definition(ctx, file, line, col)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("definition lookup failed: %v", err)), nil
-	}
-
-	if len(locations) == 0 {
-		return mcp.NewToolResultText("No definition found."), nil
-	}
-
-	var output strings.Builder
-	output.WriteString(fmt.Sprintf("Found %d definition(s):\n\n", len(locations)))
-
-	for _, loc := range locations {
-		filePath := lsp.URIToFile(loc.URI)
-		output.WriteString(fmt.Sprintf("**%s:%d:%d**\n", filePath, loc.Range.Start.Line+1, loc.Range.Start.Character+1))
-
-		// Try to read a preview snippet
-		preview := readFilePreview(filePath, loc.Range.Start.Line+1, 3)
-		if preview != "" {
-			output.WriteString("```\n")
-			output.WriteString(preview)
-			output.WriteString("```\n")
-		}
-		output.WriteString("\n")
-	}
-
-	return mcp.NewToolResultText(output.String()), nil
-}
-
-// handleFindReferences handles the find_references tool.
-func (s *Server) handleFindReferences(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	file, err := request.RequireString("file")
-	if err != nil {
-		return mcp.NewToolResultError("file is required"), nil
-	}
-
-	line := request.GetInt("line", 0)
-	if line <= 0 {
-		return mcp.NewToolResultError("line must be positive"), nil
-	}
-
-	col := request.GetInt("column", 0)
-	if col <= 0 {
-		return mcp.NewToolResultError("column must be positive"), nil
-	}
-
-	includeDecl := request.GetBool("include_declaration", true)
-
-	// Validate path
-	if !s.cfg.IsPathAllowed(file) {
-		return mcp.NewToolResultError("file is outside workspace root"), nil
-	}
-
-	locations, err := s.lspManager.References(ctx, file, line, col, includeDecl)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("references lookup failed: %v", err)), nil
-	}
-
-	if len(locations) == 0 {
-		return mcp.NewToolResultText("No references found."), nil
-	}
-
-	var output strings.Builder
-	output.WriteString(fmt.Sprintf("Found %d reference(s):\n\n", len(locations)))
-
-	// Group by file
-	fileGroups := make(map[string][]lsp.Location)
-	for _, loc := range locations {
-		filePath := lsp.URIToFile(loc.URI)
-		fileGroups[filePath] = append(fileGroups[filePath], loc)
-	}
-
-	for filePath, locs := range fileGroups {
-		output.WriteString(fmt.Sprintf("**%s** (%d)\n", filePath, len(locs)))
-		for _, loc := range locs {
-			output.WriteString(fmt.Sprintf("  L%d:%d\n", loc.Range.Start.Line+1, loc.Range.Start.Character+1))
-		}
-		output.WriteString("\n")
-	}
-
-	return mcp.NewToolResultText(output.String()), nil
-}
-
-// readFilePreview reads a few lines from a file around the given line.
-func readFilePreview(file string, line, contextLines int) string {
-	content, err := os.ReadFile(file)
-	if err != nil {
-		return ""
-	}
-
-	lines := splitLines(string(content))
-	startLine := max(1, line-contextLines)
-	endLine := min(line+contextLines, len(lines))
-
-	var preview strings.Builder
-	for i := startLine - 1; i < endLine && i < len(lines); i++ {
-		lineText := lines[i]
-		if len(lineText) > 100 {
-			lineText = lineText[:100] + "..."
-		}
-		prefix := "  "
-		if i+1 == line {
-			prefix = "> "
-		}
-		preview.WriteString(fmt.Sprintf("%s%4d: %s\n", prefix, i+1, lineText))
-	}
-
-	return preview.String()
-}
-
-// handleEditPreview handles the edit_preview tool.
-func (s *Server) handleEditPreview(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	return s.handleEdit(ctx, request, false)
-}
-
-// handleEditApply handles the edit_apply tool.
-func (s *Server) handleEditApply(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	return s.handleEdit(ctx, request, true)
-}
-
-// handleEdit is the shared implementation for edit_preview and edit_apply.
-func (s *Server) handleEdit(ctx context.Context, request mcp.CallToolRequest, apply bool) (*mcp.CallToolResult, error) {
-	file, err := request.RequireString("file")
-	if err != nil {
-		return mcp.NewToolResultError("file is required"), nil
-	}
-
-	operation, err := request.RequireString("operation")
-	if err != nil {
-		return mcp.NewToolResultError("operation is required"), nil
-	}
-
-	// Validate path
-	if !s.cfg.IsPathAllowed(file) {
-		return mcp.NewToolResultError("file is outside workspace root"), nil
-	}
-
-	// Note: We no longer validate language support here.
-	// The edit engine automatically detects whether to use AST or text mode.
-
-	// Build edit request with both AST and text-mode selectors
-	astEdit := &edit.ASTEdit{
-		File:       file,
-		Operation:  edit.EditOperation(operation),
-		NewContent: request.GetString("new_content", ""),
-		Selector: edit.ASTSelector{
-			// AST-mode selectors
-			Kind:   request.GetString("selector_kind", ""),
-			Name:   request.GetString("selector_name", ""),
-			AtLine: request.GetInt("selector_line", 0),
-			Index:  request.GetInt("selector_index", 0),
-			// Text-mode selectors
-			LineEnd:     request.GetInt("selector_line_end", 0),
-			Text:        request.GetString("selector_text", ""),
-			TextPattern: request.GetString("selector_pattern", ""),
-		},
-	}
-
-	// Perform edit
-	var result *edit.EditResult
-	if apply {
-		result, err = s.editor.Apply(ctx, astEdit)
-	} else {
-		result, err = s.editor.Preview(ctx, astEdit)
-	}
-
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("edit failed: %v", err)), nil
-	}
-
-	if !result.Success {
-		return mcp.NewToolResultError(result.Error), nil
-	}
-
-	// Format output
-	var output strings.Builder
-	if apply {
-		output.WriteString("**Edit Applied Successfully**\n\n")
-	} else {
-		output.WriteString("**Edit Preview**\n\n")
-	}
-
-	output.WriteString("Diff:\n```diff\n")
-	output.WriteString(result.Diff)
-	output.WriteString("```\n")
-
-	return mcp.NewToolResultText(output.String()), nil
-}
-
 // Run starts the MCP server and blocks until shutdown.
 func (s *Server) Run(ctx context.Context) error {
 	// Set up signal handling for graceful shutdown
@@ -1007,7 +380,7 @@ func (s *Server) Run(ctx context.Context) error {
 		s.logger.Info("received shutdown signal", "signal", sig)
 
 		// Create timeout context for shutdown
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), ServerShutdownTimeout)
 		defer shutdownCancel()
 
 		// Call graceful shutdown
@@ -1025,7 +398,7 @@ func (s *Server) Run(ctx context.Context) error {
 
 	case <-ctx.Done():
 		// Context cancelled externally
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), ServerShutdownTimeout)
 		defer shutdownCancel()
 
 		if err := s.Shutdown(shutdownCtx); err != nil {

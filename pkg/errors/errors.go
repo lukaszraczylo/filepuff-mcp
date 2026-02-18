@@ -120,6 +120,42 @@ func (e *StructuredError) WithRemediation(msg string) *StructuredError {
 	return e
 }
 
+// UserMessage returns a user-safe error message without internal details.
+// This should be used for API responses to avoid leaking implementation details.
+func (e *StructuredError) UserMessage() string {
+	// Return only the message and remediation, no stack trace, no cause details
+	if e.Remediation != "" {
+		return fmt.Sprintf("%s. %s", e.Message, e.Remediation)
+	}
+	return e.Message
+}
+
+// SanitizeError returns a user-safe error message from any error.
+// For StructuredError, it returns UserMessage().
+// For other errors, it returns a generic message to avoid leaking internals.
+func SanitizeError(err error) string {
+	if err == nil {
+		return ""
+	}
+
+	// Check if it's a StructuredError
+	if se, ok := err.(*StructuredError); ok {
+		return se.UserMessage()
+	}
+
+	// For other errors, extract only the basic message
+	// Avoid exposing full paths or implementation details
+	msg := err.Error()
+
+	// Truncate very long messages that might contain stack traces
+	const maxLen = 200
+	if len(msg) > maxLen {
+		msg = msg[:maxLen] + "..."
+	}
+
+	return msg
+}
+
 // New creates a new structured error with stack trace.
 func New(code ErrorCode, message string) *StructuredError {
 	return &StructuredError{

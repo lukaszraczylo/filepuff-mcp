@@ -482,13 +482,12 @@ func (e *Engine) matchesSelector(sel ASTSelector, n *sitter.Node, content []byte
 }
 
 // applyEdit applies the edit operation to the content.
+// AST mode uses exact byte positions — new_content is inserted verbatim without auto-indentation.
 func (e *Engine) applyEdit(edit *ASTEdit, node *sitter.Node, content []byte) ([]byte, error) {
 	startByte := node.StartByte()
 	endByte := node.EndByte()
 
-	// Detect and preserve indentation
-	indentation := detectIndentation(content, startByte)
-	newContent := indentContent(edit.NewContent, indentation)
+	newContent := edit.NewContent
 
 	var result []byte
 
@@ -499,15 +498,21 @@ func (e *Engine) applyEdit(edit *ASTEdit, node *sitter.Node, content []byte) ([]
 		result = append(result, content[endByte:]...)
 
 	case EditInsertBefore:
+		insertion := newContent
+		if !strings.HasSuffix(insertion, "\n") {
+			insertion += "\n"
+		}
 		result = append(result, content[:startByte]...)
-		result = append(result, []byte(newContent)...)
-		result = append(result, '\n')
+		result = append(result, []byte(insertion)...)
 		result = append(result, content[startByte:]...)
 
 	case EditInsertAfter:
+		insertion := newContent
+		if !strings.HasPrefix(insertion, "\n") {
+			insertion = "\n" + insertion
+		}
 		result = append(result, content[:endByte]...)
-		result = append(result, '\n')
-		result = append(result, []byte(newContent)...)
+		result = append(result, []byte(insertion)...)
 		result = append(result, content[endByte:]...)
 
 	case EditDelete:
@@ -522,16 +527,16 @@ func (e *Engine) applyEdit(edit *ASTEdit, node *sitter.Node, content []byte) ([]
 }
 
 // detectIndentation detects the indentation at a given byte position.
-func detectIndentation(content []byte, bytePos uint32) string {
+func detectIndentation(content []byte, bytePos int) string {
 	// Find the start of the line
-	lineStart := int(bytePos)
+	lineStart := bytePos
 	for lineStart > 0 && content[lineStart-1] != '\n' {
 		lineStart--
 	}
 
 	// Extract leading whitespace
 	var indent strings.Builder
-	for i := lineStart; i < int(bytePos) && i < len(content); i++ {
+	for i := lineStart; i < bytePos && i < len(content); i++ {
 		c := content[i]
 		if c == ' ' || c == '\t' {
 			indent.WriteByte(c)
@@ -560,10 +565,16 @@ func indentContent(content string, indent string) string {
 }
 
 // generateDiff creates a unified diff between original and modified content.
-// Uses Myers diff algorithm for accurate and readable diffs.
+// Uses line-level Myers diff algorithm for accurate and readable diffs.
 func generateDiff(original, modified, filename string) string {
 	dmp := diffmatchpatch.New()
-	diffs := dmp.DiffMain(original, modified, false)
+
+	// Use line-level diffing: encode each line as a single character,
+	// diff the encoded strings, then decode back to real lines.
+	// This prevents character-level diffs from splitting lines incorrectly.
+	chars1, chars2, lineArray := dmp.DiffLinesToChars(original, modified)
+	diffs := dmp.DiffMain(chars1, chars2, false)
+	diffs = dmp.DiffCharsToLines(diffs, lineArray)
 
 	// Cleanup for readability
 	diffs = dmp.DiffCleanupSemantic(diffs)
@@ -573,24 +584,25 @@ func generateDiff(original, modified, filename string) string {
 	buf.WriteString(fmt.Sprintf("--- %s\n", filename))
 	buf.WriteString(fmt.Sprintf("+++ %s\n", filename))
 
-	// Group diffs into hunks
-	lineNum := 1
 	for _, diff := range diffs {
-		lines := strings.Split(diff.Text, "\n")
-		for i, line := range lines {
-			// Skip empty last line from split
-			if i == len(lines)-1 && line == "" {
+		// SplitAfter preserves the trailing \n on each line, so we can
+		// distinguish real lines from a trailing empty split artifact.
+		lines := strings.SplitAfter(diff.Text, "\n")
+		for _, line := range lines {
+			if line == "" {
 				continue
 			}
 
+			// Remove trailing newline for display — we add our own.
+			cleanLine := strings.TrimSuffix(line, "\n")
+
 			switch diff.Type {
 			case diffmatchpatch.DiffDelete:
-				buf.WriteString(fmt.Sprintf("-%s\n", line))
+				buf.WriteString(fmt.Sprintf("-%s\n", cleanLine))
 			case diffmatchpatch.DiffInsert:
-				buf.WriteString(fmt.Sprintf("+%s\n", line))
+				buf.WriteString(fmt.Sprintf("+%s\n", cleanLine))
 			case diffmatchpatch.DiffEqual:
-				buf.WriteString(fmt.Sprintf(" %s\n", line))
-				lineNum++
+				buf.WriteString(fmt.Sprintf(" %s\n", cleanLine))
 			}
 		}
 	}
@@ -639,24 +651,6 @@ func (e *Engine) findExactText(content []byte, text string, index int) (start, e
 		return 0, 0, errors.NewInvalidSelectionError(fmt.Sprintf("text not found: %q", truncateString(text, 50)))
 	}
 
-	// If multiple matches and no index specified, require explicit selection
-	if len(matches) > 1 && index == 0 {
-		// Check if index was explicitly set to 0 or just defaulted
-		// Since we can't distinguish, we'll allow index 0 but warn about multiple matches
-		// Actually, let's be strict and require explicit index for multiple matches
-		locations := make([]string, 0, min(len(matches), 5))
-		for i, m := range matches {
-			if i >= 5 {
-				locations = append(locations, fmt.Sprintf("... and %d more", len(matches)-5))
-				break
-			}
-			line := countLines(content[:m.start]) + 1
-			locations = append(locations, fmt.Sprintf("line %d", line))
-		}
-		return 0, 0, errors.NewInvalidSelectionError(fmt.Sprintf("text matches %d locations (%s); use selector_index to specify which one (0-%d)",
-			len(matches), strings.Join(locations, ", "), len(matches)-1))
-	}
-
 	if index >= len(matches) {
 		return 0, 0, errors.NewInvalidSelectionError(fmt.Sprintf("selector_index %d out of range (found %d matches)", index, len(matches)))
 	}
@@ -674,21 +668,6 @@ func (e *Engine) findRegexPattern(content []byte, pattern string, index int) (st
 	matches := re.FindAllIndex(content, -1)
 	if len(matches) == 0 {
 		return 0, 0, errors.NewInvalidSelectionError(fmt.Sprintf("pattern not found: %q", truncateString(pattern, 50)))
-	}
-
-	// If multiple matches and index is 0 (default), show error with locations
-	if len(matches) > 1 && index == 0 {
-		locations := make([]string, 0, min(len(matches), 5))
-		for i, m := range matches {
-			if i >= 5 {
-				locations = append(locations, fmt.Sprintf("... and %d more", len(matches)-5))
-				break
-			}
-			line := countLines(content[:m[0]]) + 1
-			locations = append(locations, fmt.Sprintf("line %d", line))
-		}
-		return 0, 0, errors.NewInvalidSelectionError(fmt.Sprintf("pattern matches %d locations (%s); use selector_index to specify which one (0-%d)",
-			len(matches), strings.Join(locations, ", "), len(matches)-1))
 	}
 
 	if index >= len(matches) {
@@ -728,7 +707,7 @@ func (e *Engine) findLineRange(content []byte, lineStart, lineEnd int) (start, e
 
 	// Calculate byte positions
 	start = 0
-	for i := 0; i < startIdx; i++ {
+	for i := range startIdx {
 		start += len(lines[i]) + 1 // +1 for newline
 	}
 
@@ -746,7 +725,7 @@ func (e *Engine) findLineRange(content []byte, lineStart, lineEnd int) (start, e
 // applyTextEditOperation applies a text edit operation.
 func (e *Engine) applyTextEditOperation(op EditOperation, content []byte, start, end int, newContent string) ([]byte, error) {
 	// Detect indentation at the selection point
-	indentation := detectIndentationAtByte(content, start)
+	indentation := detectIndentation(content, start)
 	indentedContent := indentContent(newContent, indentation)
 
 	var result []byte
@@ -758,15 +737,21 @@ func (e *Engine) applyTextEditOperation(op EditOperation, content []byte, start,
 		result = append(result, content[end:]...)
 
 	case EditInsertBefore:
+		insertion := indentedContent
+		if !strings.HasSuffix(insertion, "\n") {
+			insertion += "\n"
+		}
 		result = append(result, content[:start]...)
-		result = append(result, []byte(indentedContent)...)
-		result = append(result, '\n')
+		result = append(result, []byte(insertion)...)
 		result = append(result, content[start:]...)
 
 	case EditInsertAfter:
+		insertion := indentedContent
+		if !strings.HasPrefix(insertion, "\n") {
+			insertion = "\n" + insertion
+		}
 		result = append(result, content[:end]...)
-		result = append(result, '\n')
-		result = append(result, []byte(indentedContent)...)
+		result = append(result, []byte(insertion)...)
 		result = append(result, content[end:]...)
 
 	case EditDelete:
@@ -780,39 +765,12 @@ func (e *Engine) applyTextEditOperation(op EditOperation, content []byte, start,
 	return result, nil
 }
 
-// detectIndentationAtByte detects indentation at a byte position.
-func detectIndentationAtByte(content []byte, bytePos int) string {
-	// Find the start of the line
-	lineStart := bytePos
-	for lineStart > 0 && content[lineStart-1] != '\n' {
-		lineStart--
-	}
-
-	// Extract leading whitespace
-	var indent strings.Builder
-	for i := lineStart; i < bytePos && i < len(content); i++ {
-		c := content[i]
-		if c == ' ' || c == '\t' {
-			indent.WriteByte(c)
-		} else {
-			break
-		}
-	}
-
-	return indent.String()
-}
-
 // truncateString truncates a string to maxLen with ellipsis.
 func truncateString(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
 	}
 	return s[:maxLen-3] + "..."
-}
-
-// countLines counts the number of newlines in content.
-func countLines(content []byte) int {
-	return bytes.Count(content, []byte("\n"))
 }
 
 // ValidateLanguage checks if AST editing is supported for a file.

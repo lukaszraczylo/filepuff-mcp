@@ -48,26 +48,3 @@ func TestDetectLanguage(t *testing.T) {
 		})
 	}
 }
-
-func TestGetExtension(t *testing.T) {
-	tests := []struct {
-		filename string
-		expected string
-	}{
-		{"file.go", ".go"},
-		{"file.test.go", ".go"},
-		{"path/to/file.ts", ".ts"},
-		{"noextension", ""},
-		{".hidden", ".hidden"},
-		{"file.", "."},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.filename, func(t *testing.T) {
-			result := getExtension(tt.filename)
-			if result != tt.expected {
-				t.Errorf("getExtension(%q) = %q, want %q", tt.filename, result, tt.expected)
-			}
-		})
-	}
-}

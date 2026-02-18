@@ -89,7 +89,7 @@ func TestBuildArgs(t *testing.T) {
 				MaxResults: 10,
 				Regex:      true,
 			},
-			expected: []string{"--json", "--max-count=10", "--", "test", "."},
+			expected: []string{"--json", "--max-total-count=10", "--", "test", "."},
 		},
 	}
 

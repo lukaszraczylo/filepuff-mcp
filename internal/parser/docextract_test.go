@@ -104,6 +104,7 @@ func NoComment() {}
 
 			if doc == nil {
 				t.Fatal("expected doc, got nil")
+				return
 			}
 
 			if doc.Text != tt.wantText {
@@ -192,6 +193,7 @@ function validate(name) {}
 
 			if doc == nil {
 				t.Fatal("expected doc, got nil")
+				return
 			}
 
 			if doc.Text != tt.wantText {
@@ -291,6 +293,7 @@ func TestExtractPythonDocComment(t *testing.T) {
 
 			if doc == nil {
 				t.Fatal("expected doc, got nil")
+				return
 			}
 
 			if doc.Text != tt.wantText {
@@ -372,6 +375,7 @@ int simple() { return 1; }
 
 			if doc == nil {
 				t.Fatal("expected doc, got nil")
+				return
 			}
 
 			if doc.Text != tt.wantText {

@@ -67,9 +67,11 @@ func setupLogger(level string, logFile string) *slog.Logger {
 	}
 
 	var handler slog.Handler
+	var logFileErr error
 	if logFile != "" {
 		f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 		if err != nil {
+			logFileErr = err
 			// Fallback to stderr
 			handler = slog.NewJSONHandler(os.Stderr, opts)
 		} else {
@@ -80,5 +82,15 @@ func setupLogger(level string, logFile string) *slog.Logger {
 		handler = slog.NewJSONHandler(os.Stderr, opts)
 	}
 
-	return slog.New(handler)
+	logger := slog.New(handler)
+
+	// Warn if log file couldn't be opened
+	if logFileErr != nil {
+		logger.Warn("failed to open log file, using stderr",
+			"file", logFile,
+			"error", logFileErr,
+		)
+	}
+
+	return logger
 }

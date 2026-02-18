@@ -29,8 +29,8 @@ func TestNew(t *testing.T) {
 
 	if srv == nil {
 		t.Fatal("New() returned nil server")
+		return
 	}
-
 	if srv.cfg != cfg {
 		t.Error("server config mismatch")
 	}
@@ -68,6 +68,7 @@ func TestHandlePing(t *testing.T) {
 
 	if result == nil {
 		t.Fatal("handlePing() returned nil result")
+		return
 	}
 
 	// Check that the result contains "pong"
@@ -123,6 +124,7 @@ func Hello() {
 
 	if result == nil {
 		t.Fatal("handleFileRead() returned nil result")
+		return
 	}
 
 	contents := result.Content
@@ -179,6 +181,7 @@ func Hello() {
 
 	if result == nil {
 		t.Fatal("handleFileRead() returned nil result")
+		return
 	}
 
 	contents := result.Content
@@ -270,6 +273,7 @@ func Goodbye() error {
 
 	if result == nil {
 		t.Fatal("handleASTQuery() returned nil result")
+		return
 	}
 
 	contents := result.Content
@@ -318,6 +322,7 @@ func Hello() {
 
 	if result == nil {
 		t.Fatal("handleEdit(preview) returned nil result")
+		return
 	}
 
 	// Verify file was NOT modified (it's just a preview)
@@ -367,6 +372,7 @@ func Hello() {
 
 	if result == nil {
 		t.Fatal("handleEdit(apply) returned nil result")
+		return
 	}
 
 	// Verify file WAS modified

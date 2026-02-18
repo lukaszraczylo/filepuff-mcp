@@ -214,9 +214,10 @@ func (s *Searcher) buildArgs(req *Request) []string {
 		args = append(args, "--no-ignore")
 	}
 
-	// Max count per file to limit results
+	// Global result cap — --max-total-count stops rg early across all files.
+	// Requires ripgrep >= 13.0. In-process truncation in parseOutput is kept as a safety net.
 	if req.MaxResults > 0 {
-		args = append(args, fmt.Sprintf("--max-count=%d", req.MaxResults))
+		args = append(args, fmt.Sprintf("--max-total-count=%d", req.MaxResults))
 	}
 
 	// Add pattern
@@ -243,9 +244,9 @@ func (s *Searcher) parseOutput(output *bytes.Buffer, maxResults int) (*SearchRes
 		Results: []Result{},
 	}
 
-	// Track context by file and line
-	contextBefore := make(map[string][]string) // file -> lines before current match
-	currentFile := ""
+	// Track before-context lines linearly: accumulate context lines until the next match consumes them.
+	var pendingBefore []string
+	pendingFile := ""
 
 	scanner := bufio.NewScanner(output)
 	for scanner.Scan() {
@@ -285,14 +286,14 @@ func (s *Searcher) parseOutput(output *bytes.Buffer, maxResults int) (*SearchRes
 				result.Column = match.Submatches[0].Start + 1 // 1-indexed
 			}
 
-			// Add context before
-			if ctx, ok := contextBefore[match.Path.Text]; ok {
-				result.Context.Before = ctx
-				delete(contextBefore, match.Path.Text)
+			// Attach pending before-context if it belongs to this file
+			if pendingFile == match.Path.Text && len(pendingBefore) > 0 {
+				result.Context.Before = pendingBefore
 			}
+			pendingBefore = nil
+			pendingFile = ""
 
 			results.Results = append(results.Results, result)
-			currentFile = match.Path.Text
 
 		case "context":
 			var ctx rgContext
@@ -302,19 +303,20 @@ func (s *Searcher) parseOutput(output *bytes.Buffer, maxResults int) (*SearchRes
 
 			lineText := strings.TrimRight(ctx.Lines.Text, "\n\r")
 
-			// Determine if this is before or after context
+			isAfter := false
 			if len(results.Results) > 0 {
-				lastResult := &results.Results[len(results.Results)-1]
-				if lastResult.File == ctx.Path.Text && ctx.LineNumber > lastResult.Line {
-					// This is after context
-					lastResult.Context.After = append(lastResult.Context.After, lineText)
-				} else if ctx.Path.Text == currentFile || currentFile == "" {
-					// This is before context for a potential upcoming match
-					contextBefore[ctx.Path.Text] = append(contextBefore[ctx.Path.Text], lineText)
+				last := &results.Results[len(results.Results)-1]
+				if last.File == ctx.Path.Text && ctx.LineNumber > last.Line {
+					last.Context.After = append(last.Context.After, lineText)
+					isAfter = true
 				}
-			} else {
-				// Before any match - store as potential before context
-				contextBefore[ctx.Path.Text] = append(contextBefore[ctx.Path.Text], lineText)
+			}
+			if !isAfter {
+				if pendingFile != ctx.Path.Text {
+					pendingBefore = nil
+					pendingFile = ctx.Path.Text
+				}
+				pendingBefore = append(pendingBefore, lineText)
 			}
 
 		case "summary":

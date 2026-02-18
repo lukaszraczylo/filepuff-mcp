@@ -15,6 +15,18 @@ import (
 	"github.com/lukaszraczylo/mcp-filepuff/pkg/protocol"
 )
 
+// LSP timeout and interval constants.
+const (
+	// DefaultLSPTimeout is the default timeout for LSP requests.
+	DefaultLSPTimeout = 10 * time.Second
+	// DefaultIdleTimeout is the duration before idle LSP servers are reaped.
+	DefaultIdleTimeout = 5 * time.Minute
+	// ReaperInterval is how often the idle server reaper runs.
+	ReaperInterval = 60 * time.Second
+	// ShutdownTimeout is the timeout for graceful LSP server shutdown.
+	ShutdownTimeout = 2 * time.Second
+)
+
 // Manager manages LSP servers for different languages.
 type Manager struct {
 	servers       map[protocol.Language]*ManagedServer
@@ -70,12 +82,27 @@ var DefaultServerConfigs = map[protocol.Language]ServerConfig{
 	},
 }
 
+// AllowedLSPBinaries is a whitelist of allowed LSP server binary names.
+// This prevents command injection by ensuring only known LSP servers can be executed.
+var AllowedLSPBinaries = map[string]bool{
+	"gopls":                      true,
+	"typescript-language-server": true,
+	"pylsp":                      true,
+	"clangd":                     true,
+	// Common alternatives
+	"tsserver":      true,
+	"pyright":       true,
+	"ruff-lsp":      true,
+	"rust-analyzer": true,
+	"ccls":          true,
+}
+
 // NewManager creates a new LSP manager.
 func NewManager(workspaceRoot string, logger *slog.Logger) *Manager {
 	m := &Manager{
 		servers:       make(map[protocol.Language]*ManagedServer),
-		timeout:       10 * time.Second,
-		idleTimeout:   5 * time.Minute,
+		timeout:       DefaultLSPTimeout,
+		idleTimeout:   DefaultIdleTimeout,
 		workspaceRoot: workspaceRoot,
 		logger:        logger,
 		stopReaper:    make(chan struct{}),
@@ -127,12 +154,20 @@ func (m *Manager) GetServer(ctx context.Context, lang protocol.Language) (*Manag
 		return nil, errors.NewLSPServerNotFound(string(lang), config.Command[0])
 	}
 
+	// Validate command against whitelist to prevent command injection
+	binaryName := filepath.Base(cmdPath)
+	if !AllowedLSPBinaries[binaryName] {
+		return nil, errors.New(errors.ErrLSPServerNotFound, fmt.Sprintf("LSP binary %q is not in the allowed list", binaryName)).
+			WithContext("language", string(lang)).
+			WithContext("binary", binaryName).
+			WithRemediation("Only whitelisted LSP server binaries are allowed for security reasons")
+	}
+
 	// Create command
 	args := append(config.Command[1:], config.Args...)
 	cmd := exec.CommandContext(ctx, cmdPath, args...)
 	cmd.Env = os.Environ()
 	cmd.Dir = m.workspaceRoot
-
 	// Create client
 	client, err := NewClient(cmd)
 	if err != nil {
@@ -447,7 +482,7 @@ func (m *Manager) CloseDocument(_ context.Context, lang protocol.Language, file 
 
 // reapIdleServers periodically closes idle servers.
 func (m *Manager) reapIdleServers() {
-	ticker := time.NewTicker(60 * time.Second)
+	ticker := time.NewTicker(ReaperInterval)
 	defer ticker.Stop()
 
 	for {
@@ -455,6 +490,10 @@ func (m *Manager) reapIdleServers() {
 		case <-m.stopReaper:
 			return
 		case <-ticker.C:
+			// Collect idle servers first to avoid holding the lock while closing
+			var toClose []*ManagedServer
+			var toCloseLanguages []protocol.Language
+
 			m.mu.Lock()
 			for lang, srv := range m.servers {
 				// Check lastUsed with server's lock to avoid race condition
@@ -463,12 +502,19 @@ func (m *Manager) reapIdleServers() {
 				srv.mu.Unlock()
 
 				if idle {
-					m.logger.Info("closing idle LSP server", "language", lang)
-					_ = srv.client.Close()
+					toClose = append(toClose, srv)
+					toCloseLanguages = append(toCloseLanguages, lang)
 					delete(m.servers, lang)
 				}
 			}
 			m.mu.Unlock()
+
+			// Close servers outside the lock to prevent deadlock
+			// (Close can block waiting for the process to exit)
+			for i, srv := range toClose {
+				m.logger.Info("closing idle LSP server", "language", toCloseLanguages[i])
+				_ = srv.client.Close()
+			}
 		}
 	}
 }
@@ -485,7 +531,7 @@ func (m *Manager) Close() error {
 	for lang, srv := range m.servers {
 		m.logger.Info("shutting down LSP server", "language", lang)
 		// Try graceful shutdown
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), ShutdownTimeout)
 		_, _ = srv.client.Call(ctx, "shutdown", nil)
 		cancel()
 		_ = srv.client.Notify("exit", nil)

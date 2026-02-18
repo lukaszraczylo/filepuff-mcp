@@ -1,6 +1,8 @@
 // Package protocol defines shared types used across the MCP file operations server.
 package protocol
 
+import "path/filepath"
+
 // Location represents a position in a file.
 type Location struct {
 	File   string `json:"file"`
@@ -66,7 +68,7 @@ const (
 
 // DetectLanguage detects the language from a filename.
 func DetectLanguage(filename string) Language {
-	ext := getExtension(filename)
+	ext := filepath.Ext(filename)
 	switch ext {
 	case ".go":
 		return LangGo
@@ -93,16 +95,4 @@ func DetectLanguage(filename string) Language {
 	default:
 		return LangUnknown
 	}
-}
-
-func getExtension(filename string) string {
-	for i := len(filename) - 1; i >= 0; i-- {
-		if filename[i] == '.' {
-			return filename[i:]
-		}
-		if filename[i] == '/' || filename[i] == '\\' {
-			break
-		}
-	}
-	return ""
 }
