@@ -43,9 +43,10 @@ func TestBuildArgs(t *testing.T) {
 	}
 
 	tests := []struct {
-		name     string
-		req      *Request
-		expected []string
+		name        string
+		req         *Request
+		expected    []string
+		notExpected []string // T-06: verify absence of unexpected flags
 	}{
 		{
 			name: "basic search",
@@ -54,7 +55,8 @@ func TestBuildArgs(t *testing.T) {
 				ContextLines: 2,
 				Regex:        true,
 			},
-			expected: []string{"--json", "--context=2", "--", "test", "."},
+			expected:    []string{"--json", "--context=2", "--", "test", "."},
+			notExpected: []string{"--ignore-case", "--fixed-strings", "--max-total-count=0"},
 		},
 		{
 			name: "ignore case",
@@ -63,7 +65,8 @@ func TestBuildArgs(t *testing.T) {
 				IgnoreCase: true,
 				Regex:      true,
 			},
-			expected: []string{"--json", "--ignore-case", "--", "test", "."},
+			expected:    []string{"--json", "--ignore-case", "--", "test", "."},
+			notExpected: []string{"--fixed-strings"},
 		},
 		{
 			name: "fixed strings",
@@ -71,7 +74,8 @@ func TestBuildArgs(t *testing.T) {
 				Pattern: "test",
 				Regex:   false,
 			},
-			expected: []string{"--json", "--fixed-strings", "--", "test", "."},
+			expected:    []string{"--json", "--fixed-strings", "--", "test", "."},
+			notExpected: []string{"--ignore-case"},
 		},
 		{
 			name: "with file types",
@@ -80,7 +84,8 @@ func TestBuildArgs(t *testing.T) {
 				FileTypes: []string{"go", "ts"},
 				Regex:     true,
 			},
-			expected: []string{"--json", "--type", "go", "--type", "ts", "--", "test", "."},
+			expected:    []string{"--json", "--type", "go", "--type", "ts", "--", "test", "."},
+			notExpected: []string{"--ignore-case", "--fixed-strings"},
 		},
 		{
 			name: "with max results",
@@ -89,7 +94,8 @@ func TestBuildArgs(t *testing.T) {
 				MaxResults: 10,
 				Regex:      true,
 			},
-			expected: []string{"--json", "--max-total-count=10", "--", "test", "."},
+			expected:    []string{"--json", "--max-total-count=10", "--", "test", "."},
+			notExpected: []string{"--ignore-case", "--fixed-strings"},
 		},
 	}
 
@@ -108,6 +114,16 @@ func TestBuildArgs(t *testing.T) {
 				}
 				if !found {
 					t.Errorf("expected arg %q not found in %v", exp, args)
+				}
+			}
+
+			// T-06: Check that unexpected args are absent
+			for _, notExp := range tt.notExpected {
+				for _, arg := range args {
+					if arg == notExp {
+						t.Errorf("unexpected arg %q found in %v", notExp, args)
+						break
+					}
 				}
 			}
 		})

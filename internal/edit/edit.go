@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 
@@ -60,6 +61,7 @@ type EditResult struct {
 // Engine performs AST-aware edits.
 type Engine struct {
 	registry  *parser.Registry
+	dmp       *diffmatchpatch.DiffMatchPatch
 	fileLocks sync.Map // map[string]*sync.Mutex for per-file locking
 }
 
@@ -67,6 +69,7 @@ type Engine struct {
 func NewEngine(registry *parser.Registry) *Engine {
 	return &Engine{
 		registry:  registry,
+		dmp:       diffmatchpatch.New(),
 		fileLocks: sync.Map{},
 	}
 }
@@ -166,7 +169,7 @@ func (e *Engine) performASTEdit(ctx context.Context, edit *ASTEdit, apply bool) 
 	}
 
 	// Generate diff
-	diff := generateDiff(string(content), string(newContent), edit.File)
+	diff := e.generateDiff(string(content), string(newContent), edit.File)
 
 	result := &EditResult{
 		Success:         true,
@@ -225,7 +228,7 @@ func (e *Engine) performTextEdit(_ context.Context, edit *ASTEdit, apply bool) (
 	}
 
 	// Generate diff
-	diff := generateDiff(string(content), string(newContent), edit.File)
+	diff := e.generateDiff(string(content), string(newContent), edit.File)
 
 	result := &EditResult{
 		Success:         true,
@@ -369,17 +372,18 @@ func sortBySpecificity(nodes []*sitter.Node) []*sitter.Node {
 		return nodes
 	}
 
-	// Sort by specificity: named nodes first, then by size (smallest first)
 	result := make([]*sitter.Node, len(nodes))
 	copy(result, nodes)
 
-	for i := 0; i < len(result)-1; i++ {
-		for j := i + 1; j < len(result); j++ {
-			if shouldPrefer(result[j], result[i]) {
-				result[i], result[j] = result[j], result[i]
-			}
+	slices.SortFunc(result, func(a, b *sitter.Node) int {
+		if shouldPrefer(a, b) {
+			return -1
 		}
-	}
+		if shouldPrefer(b, a) {
+			return 1
+		}
+		return 0
+	})
 
 	return result
 }
@@ -566,8 +570,8 @@ func indentContent(content string, indent string) string {
 
 // generateDiff creates a unified diff between original and modified content.
 // Uses line-level Myers diff algorithm for accurate and readable diffs.
-func generateDiff(original, modified, filename string) string {
-	dmp := diffmatchpatch.New()
+func (e *Engine) generateDiff(original, modified, filename string) string {
+	dmp := e.dmp
 
 	// Use line-level diffing: encode each line as a single character,
 	// diff the encoded strings, then decode back to real lines.
@@ -692,6 +696,10 @@ func (e *Engine) findLineRange(content []byte, lineStart, lineEnd int) (start, e
 	}
 
 	lines := bytes.Split(content, []byte("\n"))
+	// Trim phantom empty element from trailing newline
+	if len(lines) > 0 && len(lines[len(lines)-1]) == 0 {
+		lines = lines[:len(lines)-1]
+	}
 	totalLines := len(lines)
 
 	// Convert to 0-indexed

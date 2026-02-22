@@ -81,8 +81,8 @@ func (s *Server) handleFileRead(ctx context.Context, request mcp.CallToolRequest
 		return mcp.NewToolResultError("path is outside workspace root"), nil
 	}
 
-	// Read file
-	content, err := os.ReadFile(path)
+	// Check file size before reading to avoid loading huge files into memory
+	info, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return mcp.NewToolResultError(fmt.Sprintf("file not found: %s", path)), nil
@@ -90,13 +90,21 @@ func (s *Server) handleFileRead(ctx context.Context, request mcp.CallToolRequest
 		if os.IsPermission(err) {
 			return mcp.NewToolResultError(fmt.Sprintf("permission denied: %s", path)), nil
 		}
-		s.logger.Warn("file read error", "path", path, "error", err)
-		return mcp.NewToolResultError("error reading file"), nil
+		s.logger.Warn("file stat error", "path", path, "error", err)
+		return mcp.NewToolResultError("error accessing file"), nil
+	}
+	if info.Size() > s.cfg.MaxFileSize {
+		return mcp.NewToolResultError(fmt.Sprintf("file too large (%d bytes, max %d)", info.Size(), s.cfg.MaxFileSize)), nil
 	}
 
-	// Check file size
-	if int64(len(content)) > s.cfg.MaxFileSize {
-		return mcp.NewToolResultError(fmt.Sprintf("file too large (%d bytes, max %d)", len(content), s.cfg.MaxFileSize)), nil
+	// Read file
+	content, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsPermission(err) {
+			return mcp.NewToolResultError(fmt.Sprintf("permission denied: %s", path)), nil
+		}
+		s.logger.Warn("file read error", "path", path, "error", err)
+		return mcp.NewToolResultError("error reading file"), nil
 	}
 
 	// Handle line range
@@ -167,13 +175,18 @@ func splitLines(s string) []string {
 	const largeSizeThreshold = 1024 * 1024 // 1MB
 
 	if len(s) > largeSizeThreshold {
-		// Use scanner for large files
+		// Use scanner for large files with increased buffer for long lines
 		scanner := bufio.NewScanner(strings.NewReader(s))
+		scanner.Buffer(make([]byte, 0, bufio.MaxScanTokenSize), 1024*1024) // up to 1MB per line
 		var lines []string
 		for scanner.Scan() {
 			lines = append(lines, scanner.Text())
 		}
-		// Handle potential error and add empty line if string ended with newline
+		if err := scanner.Err(); err != nil {
+			// If scanning fails (e.g. line exceeds buffer), fall back to strings.Split
+			return strings.Split(s, "\n")
+		}
+		// Add empty line if string ended with newline
 		if len(s) > 0 && s[len(s)-1] == '\n' {
 			lines = append(lines, "")
 		}

@@ -54,9 +54,9 @@ func (s *Server) handleASTQuery(ctx context.Context, request mcp.CallToolRequest
 	}
 
 	// Find files to search based on language
-	ext := languageToExtension(language)
-	if ext == "" {
-		return mcp.NewToolResultError(fmt.Sprintf("unsupported language: %s", language)), nil
+	exts := languageToExtensions(language)
+	if len(exts) == 0 {
+		return mcp.NewToolResultError(fmt.Sprintf("unsupported language: %s (supported: go, typescript, javascript, python, c, cpp, html, vue, elixir)", language)), nil
 	}
 
 	var allResults []query.MatchResult
@@ -89,7 +89,14 @@ func (s *Server) handleASTQuery(ctx context.Context, request mcp.CallToolRequest
 			}
 
 			// Check file extension matches language
-			if !strings.HasSuffix(path, ext) {
+			matched := false
+			for _, ext := range exts {
+				if strings.HasSuffix(path, ext) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
 				return nil
 			}
 
@@ -203,24 +210,28 @@ func symbolKindIcon(kind protocol.SymbolKind) string {
 	}
 }
 
-// languageToExtension maps language names to file extensions.
-func languageToExtension(language string) string {
+// languageToExtensions maps language names to file extensions.
+func languageToExtensions(language string) []string {
 	switch strings.ToLower(language) {
 	case "go":
-		return ".go"
+		return []string{".go"}
 	case "typescript":
-		return ".ts"
+		return []string{".ts"}
 	case "javascript":
-		return ".js"
+		return []string{".js"}
 	case "python":
-		return ".py"
+		return []string{".py"}
 	case "c":
-		return ".c"
+		return []string{".c"}
 	case "cpp", "c++":
-		return ".cpp"
+		return []string{".cpp"}
+	case "html":
+		return []string{".html", ".htm"}
+	case "vue":
+		return []string{".vue"}
 	case "elixir":
-		return ".ex"
+		return []string{".ex", ".exs"}
 	default:
-		return ""
+		return nil
 	}
 }

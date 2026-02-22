@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,6 +29,9 @@ const (
 )
 
 // Manager manages LSP servers for different languages.
+//
+// Lock ordering: m.mu must always be acquired before srv.mu.
+// Never acquire m.mu while holding srv.mu.
 type Manager struct {
 	servers       map[protocol.Language]*ManagedServer
 	logger        *slog.Logger
@@ -36,6 +40,7 @@ type Manager struct {
 	timeout       time.Duration
 	idleTimeout   time.Duration
 	mu            sync.RWMutex
+	closeOnce     sync.Once
 	stopped       bool
 }
 
@@ -163,9 +168,10 @@ func (m *Manager) GetServer(ctx context.Context, lang protocol.Language) (*Manag
 			WithRemediation("Only whitelisted LSP server binaries are allowed for security reasons")
 	}
 
-	// Create command
+	// Create command — use exec.Command (not CommandContext) so the LSP
+	// subprocess is not killed when the request-scoped context expires.
 	args := append(config.Command[1:], config.Args...)
-	cmd := exec.CommandContext(ctx, cmdPath, args...)
+	cmd := exec.Command(cmdPath, args...)
 	cmd.Env = os.Environ()
 	cmd.Dir = m.workspaceRoot
 	// Create client
@@ -412,9 +418,13 @@ func (m *Manager) References(ctx context.Context, file string, line, col int, in
 }
 
 // ensureDocumentOpen opens a document if not already open.
-func (m *Manager) ensureDocumentOpen(ctx context.Context, srv *ManagedServer, file string) error {
+// It reads the file content outside the lock (to avoid holding the lock during I/O),
+// then holds srv.mu for the entire check-and-send sequence to prevent duplicate didOpen
+// notifications from concurrent goroutines.
+func (m *Manager) ensureDocumentOpen(_ context.Context, srv *ManagedServer, file string) error {
 	uri := fileToURI(file)
 
+	// Quick check under lock — common fast path.
 	srv.mu.Lock()
 	if _, ok := srv.openDocs[uri]; ok {
 		srv.mu.Unlock()
@@ -422,14 +432,22 @@ func (m *Manager) ensureDocumentOpen(ctx context.Context, srv *ManagedServer, fi
 	}
 	srv.mu.Unlock()
 
-	// Read file content
+	// Read file content outside the lock to avoid holding it during I/O.
 	content, err := os.ReadFile(file)
 	if err != nil {
 		return fmt.Errorf("failed to read file: %w", err)
 	}
 
-	// Get language ID
 	langID := languageToLSPID(srv.language)
+
+	// Re-acquire lock and re-check to prevent TOCTOU race: two goroutines could
+	// both pass the fast-path check above and both try to send didOpen.
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+
+	if _, ok := srv.openDocs[uri]; ok {
+		return nil
+	}
 
 	params := DidOpenTextDocumentParams{
 		TextDocument: TextDocumentItem{
@@ -444,10 +462,7 @@ func (m *Manager) ensureDocumentOpen(ctx context.Context, srv *ManagedServer, fi
 		return fmt.Errorf("didOpen failed: %w", err)
 	}
 
-	srv.mu.Lock()
 	srv.openDocs[uri] = 1
-	srv.mu.Unlock()
-
 	return nil
 }
 
@@ -519,26 +534,28 @@ func (m *Manager) reapIdleServers() {
 	}
 }
 
-// Close shuts down all LSP servers.
+// Close shuts down all LSP servers. It is safe to call multiple times.
 func (m *Manager) Close() error {
-	close(m.stopReaper)
+	m.closeOnce.Do(func() {
+		close(m.stopReaper)
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
+		m.mu.Lock()
+		defer m.mu.Unlock()
 
-	m.stopped = true
+		m.stopped = true
 
-	for lang, srv := range m.servers {
-		m.logger.Info("shutting down LSP server", "language", lang)
-		// Try graceful shutdown
-		ctx, cancel := context.WithTimeout(context.Background(), ShutdownTimeout)
-		_, _ = srv.client.Call(ctx, "shutdown", nil)
-		cancel()
-		_ = srv.client.Notify("exit", nil)
-		_ = srv.client.Close()
-	}
+		for lang, srv := range m.servers {
+			m.logger.Info("shutting down LSP server", "language", lang)
+			// Try graceful shutdown
+			ctx, cancel := context.WithTimeout(context.Background(), ShutdownTimeout)
+			_, _ = srv.client.Call(ctx, "shutdown", nil)
+			cancel()
+			_ = srv.client.Notify("exit", nil)
+			_ = srv.client.Close()
+		}
 
-	m.servers = make(map[protocol.Language]*ManagedServer)
+		m.servers = make(map[protocol.Language]*ManagedServer)
+	})
 	return nil
 }
 
@@ -553,13 +570,13 @@ func (m *Manager) IsAvailable(lang protocol.Language) bool {
 	return err == nil
 }
 
-// fileToURI converts a file path to a file URI.
+// fileToURI converts a file path to a properly percent-encoded file URI.
 func fileToURI(file string) string {
 	absPath, err := filepath.Abs(file)
 	if err != nil {
-		return "file://" + file
+		absPath = file
 	}
-	return "file://" + absPath
+	return (&url.URL{Scheme: "file", Path: absPath}).String()
 }
 
 // URIToFile converts a file URI to a file path.

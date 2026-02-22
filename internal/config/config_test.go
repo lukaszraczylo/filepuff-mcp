@@ -389,8 +389,8 @@ func TestIsPathAllowedEdgeCases(t *testing.T) {
 		{
 			name:    "workspace_root_itself",
 			path:    tmpDir,
-			allowed: false,
-			desc:    "workspace root itself should not be allowed",
+			allowed: true,
+			desc:    "workspace root itself should be allowed",
 		},
 		{
 			name:    "dot_relative",
@@ -543,6 +543,59 @@ func TestConfigFileLoadingErrors(t *testing.T) {
 	_, err = Load(tmpDir)
 	if err == nil {
 		t.Error("expected error when loading invalid JSON config file")
+	}
+}
+
+// TestIsPathAllowed_SymlinkOutsideWorkspace verifies that symlinks pointing
+// outside the workspace are rejected (T-01).
+func TestIsPathAllowed_SymlinkOutsideWorkspace(t *testing.T) {
+	// Create two separate temp dirs: one as workspace, one as outside target
+	workspace, err := os.MkdirTemp("", "mcp-workspace-*")
+	if err != nil {
+		t.Fatalf("failed to create workspace dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(workspace) })
+
+	outside, err := os.MkdirTemp("", "mcp-outside-*")
+	if err != nil {
+		t.Fatalf("failed to create outside dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(outside) })
+
+	// Create a file outside the workspace
+	outsideFile := filepath.Join(outside, "secret.txt")
+	if err := os.WriteFile(outsideFile, []byte("secret"), 0o600); err != nil {
+		t.Fatalf("failed to write outside file: %v", err)
+	}
+
+	// Create a symlink inside the workspace pointing outside
+	symlinkPath := filepath.Join(workspace, "escape-link")
+	if err := os.Symlink(outsideFile, symlinkPath); err != nil {
+		t.Skip("symlink creation not supported on this system")
+	}
+
+	cfg := Default()
+	cfg.WorkspaceRoot = workspace
+
+	// The symlink resolves to a file outside workspace — must be rejected
+	if cfg.IsPathAllowed(symlinkPath) {
+		t.Error("symlink pointing outside workspace should NOT be allowed")
+	}
+
+	// Direct access to the outside file should also be rejected
+	if cfg.IsPathAllowed(outsideFile) {
+		t.Error("file outside workspace should NOT be allowed")
+	}
+
+	// File inside workspace should still be allowed
+	insideFile := filepath.Join(workspace, "safe.txt")
+	if !cfg.IsPathAllowed(insideFile) {
+		t.Error("file inside workspace should be allowed")
+	}
+
+	// Workspace root itself should be allowed (C-08 fix)
+	if !cfg.IsPathAllowed(workspace) {
+		t.Error("workspace root itself should be allowed")
 	}
 }
 

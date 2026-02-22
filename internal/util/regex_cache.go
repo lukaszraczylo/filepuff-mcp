@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"regexp"
 	"sync"
-	"sync/atomic"
 )
 
 const (
@@ -19,10 +18,11 @@ const (
 )
 
 // regexCache is a global thread-safe cache for compiled regular expressions.
-// Caching regex compilation provides 10-50x speedup for repeated patterns.
+// Uses sync.RWMutex with a regular map so that ClearRegexCache can atomically
+// clear the map and reset the count in a single lock acquisition.
 var (
-	regexCache sync.Map // string -> *regexp.Regexp
-	cacheSize  atomic.Int64
+	cacheMu    sync.RWMutex
+	regexCache = make(map[string]*regexp.Regexp)
 )
 
 // RegexError represents an error during regex compilation or validation.
@@ -62,7 +62,7 @@ func ValidatePattern(pattern string) error {
 }
 
 // CompileRegex compiles a regex pattern with caching and validation for security.
-// Thread-safe: uses LoadOrStore to prevent race conditions.
+// Thread-safe: uses RWMutex to prevent race conditions.
 // Returns the compiled regex or an error if the pattern is invalid or unsafe.
 func CompileRegex(pattern string) (*regexp.Regexp, error) {
 	// Validate pattern first
@@ -70,12 +70,15 @@ func CompileRegex(pattern string) (*regexp.Regexp, error) {
 		return nil, err
 	}
 
-	// Check cache first
-	if cached, ok := regexCache.Load(pattern); ok {
-		return cached.(*regexp.Regexp), nil
+	// Check cache first (read lock)
+	cacheMu.RLock()
+	if cached, ok := regexCache[pattern]; ok {
+		cacheMu.RUnlock()
+		return cached, nil
 	}
+	cacheMu.RUnlock()
 
-	// Compile regex
+	// Compile regex outside the lock to avoid holding it during compilation
 	re, err := regexp.Compile(pattern)
 	if err != nil {
 		return nil, &RegexError{
@@ -85,18 +88,22 @@ func CompileRegex(pattern string) (*regexp.Regexp, error) {
 		}
 	}
 
-	// Check cache size and clear if too large
-	if cacheSize.Load() >= MaxCacheSize {
-		ClearRegexCache()
+	// Write lock to store in cache
+	cacheMu.Lock()
+	// Re-check in case another goroutine stored it while we were compiling
+	if cached, ok := regexCache[pattern]; ok {
+		cacheMu.Unlock()
+		return cached, nil
 	}
 
-	// Try to store - if another goroutine already stored it, use theirs
-	// This prevents race conditions where multiple goroutines compile the same pattern
-	actual, loaded := regexCache.LoadOrStore(pattern, re)
-	if !loaded {
-		cacheSize.Add(1)
+	// Check cache size and clear if too large
+	if len(regexCache) >= MaxCacheSize {
+		regexCache = make(map[string]*regexp.Regexp)
 	}
-	return actual.(*regexp.Regexp), nil
+
+	regexCache[pattern] = re
+	cacheMu.Unlock()
+	return re, nil
 }
 
 // CompileRegexUncached compiles a regex pattern without caching.
@@ -118,18 +125,19 @@ func CompileRegexUncached(pattern string) (*regexp.Regexp, error) {
 }
 
 // ClearRegexCache clears all cached compiled regular expressions.
-// Useful for testing or when memory usage needs to be reduced.
+// Atomically replaces the map under a single write lock.
 func ClearRegexCache() {
-	regexCache.Range(func(key, _ interface{}) bool {
-		regexCache.Delete(key)
-		return true
-	})
-	cacheSize.Store(0)
+	cacheMu.Lock()
+	regexCache = make(map[string]*regexp.Regexp)
+	cacheMu.Unlock()
 }
 
 // CacheStats returns the current number of cached patterns.
 func CacheStats() int64 {
-	return cacheSize.Load()
+	cacheMu.RLock()
+	n := int64(len(regexCache))
+	cacheMu.RUnlock()
+	return n
 }
 
 // truncatePattern truncates a pattern for display in error messages.

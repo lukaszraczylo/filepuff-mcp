@@ -131,6 +131,11 @@ func (s *Searcher) Search(ctx context.Context, req *Request) (*SearchResults, er
 			WithRemediation("Provide a non-empty search pattern")
 	}
 
+	// Validate that at least one provided path is allowed
+	if err := s.validatePaths(req.Paths); err != nil {
+		return nil, err
+	}
+
 	// Build ripgrep command
 	args := s.buildArgs(req)
 
@@ -236,6 +241,22 @@ func (s *Searcher) buildArgs(req *Request) []string {
 	}
 
 	return args
+}
+
+// validatePaths checks that at least one caller-provided path is allowed.
+// Returns an error if paths were provided but none passed IsPathAllowed.
+func (s *Searcher) validatePaths(paths []string) error {
+	if len(paths) == 0 {
+		return nil // no explicit paths — will default to workspace root
+	}
+	for _, p := range paths {
+		if s.cfg.IsPathAllowed(p) {
+			return nil
+		}
+	}
+	return errors.New(errors.ErrPathNotAllowed, "all provided search paths are outside the workspace root").
+		WithContext("paths", fmt.Sprintf("%v", paths)).
+		WithRemediation("Provide paths within the workspace root")
 }
 
 // parseOutput parses ripgrep JSON output.

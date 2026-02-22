@@ -2,8 +2,11 @@ package parser
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/cespare/xxhash/v2"
 )
 
 // BenchmarkParse benchmarks parsing files of various sizes.
@@ -194,7 +197,7 @@ func BenchmarkContentHash(b *testing.B) {
 			b.ReportAllocs()
 
 			for i := 0; i < b.N; i++ {
-				_ = contentHash(content)
+				_ = fmt.Sprintf("%016x", xxhash.Sum64(content))
 			}
 		})
 	}

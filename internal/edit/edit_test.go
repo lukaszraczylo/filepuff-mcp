@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/lukaszraczylo/mcp-filepuff/internal/parser"
+	"github.com/sergi/go-diff/diffmatchpatch"
 	sitter "github.com/smacker/go-tree-sitter"
 )
 
@@ -394,7 +395,7 @@ func TestGenerateDiff(t *testing.T) {
 	modified := "line1\nmodified\nline3"
 	filename := "test.txt"
 
-	diff := generateDiff(original, modified, filename)
+	diff := (&Engine{dmp: diffmatchpatch.New()}).generateDiff(original, modified, filename)
 
 	if !strings.Contains(diff, "---") {
 		t.Error("diff should contain --- header")
@@ -420,7 +421,7 @@ func TestGenerateDiffLineLevelAccuracy(t *testing.T) {
 	original := "package main\n\nfunc hello() {\n\tfmt.Println(\"hello\")\n}\n"
 	modified := "package main\n\nfunc hello() {\n\tfmt.Println(\"hello world\")\n}\n"
 
-	diff := generateDiff(original, modified, "test.go")
+	diff := (&Engine{dmp: diffmatchpatch.New()}).generateDiff(original, modified, "test.go")
 
 	// The diff must show whole-line removals and additions
 	if !strings.Contains(diff, "-\tfmt.Println(\"hello\")\n") {
@@ -453,7 +454,7 @@ func TestGenerateDiffNoPhantomChanges(t *testing.T) {
 	original := "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\n"
 	modified := "line1\nREPLACED\nline3\nline4\nline5\nline6\nline7\nline8\n"
 
-	diff := generateDiff(original, modified, "test.txt")
+	diff := (&Engine{dmp: diffmatchpatch.New()}).generateDiff(original, modified, "test.txt")
 
 	// Count changed lines (excluding headers)
 	addCount := 0

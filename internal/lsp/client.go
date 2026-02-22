@@ -268,7 +268,11 @@ func (c *Client) send(msg interface{}) error {
 }
 
 // readLoop reads and dispatches messages from the server.
+// On exit (for any reason), it drains all pending Call waiters with a
+// synthetic error so that goroutines blocked in Call are unblocked.
 func (c *Client) readLoop() {
+	defer c.drainPending()
+
 	reader := bufio.NewReader(c.stdout)
 
 	for {
@@ -326,6 +330,25 @@ func (c *Client) readLoop() {
 				// Drop notification if channel is full
 			}
 		}
+	}
+}
+
+// drainPending sends a synthetic error response to every pending Call waiter
+// so that goroutines blocked in Call are unblocked when readLoop exits.
+func (c *Client) drainPending() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for id, ch := range c.pending {
+		ch <- &Response{
+			JSONRPC: "2.0",
+			ID:      id,
+			Error: &ResponseError{
+				Code:    -32603, // InternalError
+				Message: "LSP client readLoop terminated",
+			},
+		}
+		delete(c.pending, id)
 	}
 }
 

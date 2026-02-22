@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"testing"
+
+	"github.com/cespare/xxhash/v2"
 )
 
 // TestLRUCacheEviction tests that the LRU cache properly evicts old entries.
@@ -82,8 +84,8 @@ func TestContentHashCollisionResistance(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			hash1 := contentHash(tc.content1)
-			hash2 := contentHash(tc.content2)
+			hash1 := fmt.Sprintf("%016x", xxhash.Sum64(tc.content1))
+			hash2 := fmt.Sprintf("%016x", xxhash.Sum64(tc.content2))
 
 			if hash1 == hash2 {
 				t.Errorf("Hash collision: %s == %s for different content", hash1, hash2)
@@ -96,9 +98,9 @@ func TestContentHashCollisionResistance(t *testing.T) {
 func TestContentHashConsistency(t *testing.T) {
 	content := []byte("package main\n\nfunc test() {}\n")
 
-	hash1 := contentHash(content)
-	hash2 := contentHash(content)
-	hash3 := contentHash(content)
+	hash1 := fmt.Sprintf("%016x", xxhash.Sum64(content))
+	hash2 := fmt.Sprintf("%016x", xxhash.Sum64(content))
+	hash3 := fmt.Sprintf("%016x", xxhash.Sum64(content))
 
 	if hash1 != hash2 || hash2 != hash3 {
 		t.Errorf("Hash inconsistency: %s, %s, %s", hash1, hash2, hash3)
@@ -115,7 +117,7 @@ func BenchmarkContentHash_xxHash(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = contentHash(content)
+		_ = fmt.Sprintf("%016x", xxhash.Sum64(content))
 	}
 }
 

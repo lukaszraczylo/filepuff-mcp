@@ -189,10 +189,30 @@ func TestManagerGracefulShutdown(t *testing.T) {
 	if !manager.stopped {
 		t.Error("manager should be marked as stopped after Close()")
 	}
+}
 
-	// Note: We don't test multiple Close() calls because the implementation
-	// closes the stopReaper channel which can't be closed twice.
-	// In production, Close() should only be called once during shutdown.
+// TestManagerDoubleClose verifies that calling Close() twice does not panic (T-05, C-02).
+func TestManagerDoubleClose(t *testing.T) {
+	tmpDir := t.TempDir()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	manager := NewManager(tmpDir, logger)
+
+	// First close should succeed
+	err := manager.Close()
+	if err != nil {
+		t.Errorf("first Close() returned error: %v", err)
+	}
+
+	// Second close must not panic (C-02 fix wraps close in sync.Once)
+	err = manager.Close()
+	if err != nil {
+		t.Errorf("second Close() returned error: %v", err)
+	}
+
+	if !manager.stopped {
+		t.Error("manager should be marked as stopped after double Close()")
+	}
 }
 
 // TestManagerIdleReaper tests the idle server cleanup mechanism.

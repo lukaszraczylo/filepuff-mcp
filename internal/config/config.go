@@ -69,12 +69,25 @@ func Load(workspaceRoot string) (*Config, error) {
 		cfg.WorkspaceRoot = cwd
 	}
 
-	// Try to load from config file in workspace root
+	// Try to load from config file in workspace root.
+	// Save WorkspaceRoot before loading config file so it cannot be overridden.
+	savedRoot := cfg.WorkspaceRoot
 	configPath := filepath.Join(cfg.WorkspaceRoot, ".mcp-filepuff.json")
 	if data, err := os.ReadFile(configPath); err == nil {
 		if err := json.Unmarshal(data, cfg); err != nil {
 			return nil, err
 		}
+	}
+	// Restore WorkspaceRoot — config file must not override path guards.
+	cfg.WorkspaceRoot = savedRoot
+
+	// Clamp size limits to prevent config file from requesting excessive memory.
+	const maxAllowedSize int64 = 100 * 1024 * 1024 // 100 MB
+	if cfg.MaxFileSize > maxAllowedSize {
+		cfg.MaxFileSize = maxAllowedSize
+	}
+	if cfg.MaxParseSize > maxAllowedSize {
+		cfg.MaxParseSize = maxAllowedSize
 	}
 
 	// Override from environment variables
@@ -173,8 +186,8 @@ func (c *Config) IsPathAllowed(path string) bool {
 
 	// Check if the path is within workspace (doesn't start with ..)
 	// This prevents both "../" attacks and symlink bypasses
-	// Also reject empty relative path (which means it's the workspace root itself)
-	return rel != "." && !strings.HasPrefix(rel, "..")
+	// The workspace root itself (rel == ".") is a valid, allowed path
+	return !strings.HasPrefix(rel, "..")
 }
 
 // Validate validates the configuration and returns an error if invalid.

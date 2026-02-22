@@ -126,7 +126,7 @@ func TestIsPathAllowed_BasicCases(t *testing.T) {
 		{
 			name:     "workspace root itself",
 			path:     tmpDir,
-			expected: false, // Empty relative path
+			expected: true, // Workspace root is a valid, allowed path (needed for ast_query)
 		},
 	}
 

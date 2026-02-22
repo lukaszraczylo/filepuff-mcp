@@ -24,9 +24,8 @@ import (
 	"github.com/lukaszraczylo/mcp-filepuff/pkg/protocol"
 )
 
-// MaxFileSize is the default maximum file size we'll parse (10MB).
-// Deprecated: Use Registry.maxParseSize instead.
-const MaxFileSize = 10 * 1024 * 1024
+// maxFileSize is the default maximum file size we'll parse (10MB).
+const maxFileSize = 10 * 1024 * 1024
 
 // Registry manages Tree-sitter parsers for different languages.
 type Registry struct {
@@ -69,18 +68,6 @@ type SyntaxError struct {
 	Location protocol.Location
 }
 
-// CacheStatsResult contains cache statistics.
-type CacheStatsResult struct {
-	Hits           int64   `json:"hits"`
-	Misses         int64   `json:"misses"`
-	HitRate        float64 `json:"hit_rate"`
-	Size           int     `json:"size"`
-	TotalParseTime int64   `json:"total_parse_time_ns"`
-	ParseCount     int64   `json:"parse_count"`
-	AvgParseTime   int64   `json:"avg_parse_time_ns"`
-	LastParseTime  int64   `json:"last_parse_time_ns"`
-}
-
 // NewRegistry creates a new parser registry with the default max parse size.
 // For custom max parse size, use NewRegistryWithSize.
 func NewRegistry() *Registry {
@@ -98,7 +85,7 @@ func NewRegistryWithSize(maxParseSize int64) *Registry {
 	}
 
 	if maxParseSize <= 0 {
-		maxParseSize = MaxFileSize
+		maxParseSize = maxFileSize
 	}
 
 	return &Registry{
@@ -266,50 +253,6 @@ func (r *Registry) Parse(ctx context.Context, filename string, content []byte) (
 	}, nil
 }
 
-// CacheStats returns cache hit/miss statistics.
-func (r *Registry) CacheStats() (hits, misses int64) {
-	return r.cacheHits.Load(), r.cacheMisses.Load()
-}
-
-// CacheStatsDetailed returns detailed cache and parse statistics.
-func (r *Registry) CacheStatsDetailed() CacheStatsResult {
-	hits := r.cacheHits.Load()
-	misses := r.cacheMisses.Load()
-	totalParseTime := r.totalParseTime.Load()
-	parseCount := r.parseCount.Load()
-
-	var hitRate float64
-	total := hits + misses
-	if total > 0 {
-		hitRate = float64(hits) / float64(total)
-	}
-
-	var avgParseTime int64
-	if parseCount > 0 {
-		avgParseTime = totalParseTime / parseCount
-	}
-
-	return CacheStatsResult{
-		Hits:           hits,
-		Misses:         misses,
-		HitRate:        hitRate,
-		Size:           r.cache.Len(),
-		TotalParseTime: totalParseTime,
-		ParseCount:     parseCount,
-		AvgParseTime:   avgParseTime,
-		LastParseTime:  r.lastParseDuration.Load(),
-	}
-}
-
-// ResetStats resets all cache and parse statistics.
-func (r *Registry) ResetStats() {
-	r.cacheHits.Store(0)
-	r.cacheMisses.Store(0)
-	r.totalParseTime.Store(0)
-	r.parseCount.Store(0)
-	r.lastParseDuration.Store(0)
-}
-
 // extractErrors finds all error nodes in the tree.
 func extractErrors(node *sitter.Node, _ []byte) []SyntaxError {
 	var errors []SyntaxError
@@ -344,13 +287,6 @@ func extractErrors(node *sitter.Node, _ []byte) []SyntaxError {
 
 	walk(node)
 	return errors
-}
-
-// contentHash returns a fast hash of the content for caching.
-// Uses xxHash which is 5-10x faster than SHA256 for non-cryptographic purposes.
-func contentHash(content []byte) string {
-	h := xxhash.Sum64(content)
-	return fmt.Sprintf("%016x", h)
 }
 
 // isBinary checks if content appears to be binary.

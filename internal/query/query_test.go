@@ -499,6 +499,155 @@ func TestFormatResults(t *testing.T) {
 	}
 }
 
+// TestMatchStructOperatorPrecedence verifies the C-07 operator precedence fix.
+// Before the fix, patterns like "struct Foo" would match because
+// strings.Contains(p, "struct ") short-circuited the entire condition.
+// After the fix, both "struct" must be present for the struct branch to match.
+func TestMatchStructOperatorPrecedence(t *testing.T) {
+	reg := parser.NewRegistry()
+	defer reg.Close()
+
+	matcher := NewMatcher(reg)
+
+	content := `package main
+
+type Server struct {
+	Port int
+}
+
+func main() {}
+`
+
+	ctx := context.Background()
+	result, err := reg.Parse(ctx, "test.go", []byte(content))
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+
+	tests := []struct {
+		name        string
+		pattern     string
+		wantMatches int
+	}{
+		{
+			name:        "type struct pattern should match",
+			pattern:     "type $NAME struct { $$$FIELDS }",
+			wantMatches: 1, // Server
+		},
+		{
+			name:        "struct keyword alone should match",
+			pattern:     "struct $NAME { $$$FIELDS }",
+			wantMatches: 1, // Server
+		},
+		{
+			name:        "func pattern should not match struct branch",
+			pattern:     "func $NAME() {}",
+			wantMatches: 1, // main (matches function branch, not struct)
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			query := &ASTQuery{
+				Pattern:  tt.pattern,
+				Language: "go",
+			}
+			results, err := matcher.Match(ctx, query, result.Tree, []byte(content), "test.go")
+			if err != nil {
+				t.Fatalf("match failed: %v", err)
+			}
+			if len(results) != tt.wantMatches {
+				t.Errorf("expected %d matches, got %d", tt.wantMatches, len(results))
+				for i, r := range results {
+					t.Logf("match %d: type=%s, text=%q", i, r.Node.Type(), truncateForLog(r.Text, 80))
+				}
+			}
+		})
+	}
+}
+
+func truncateForLog(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
+}
+
+// TestPassesFilters_AllBranches tests passesFilters for each filter type.
+func TestPassesFilters_AllBranches(t *testing.T) {
+	reg := parser.NewRegistry()
+	defer reg.Close()
+
+	content := `package main
+
+func Alpha() {}
+func Beta() {}
+func Gamma() {}
+`
+
+	ctx := context.Background()
+	result, err := reg.Parse(ctx, "test.go", []byte(content))
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+
+	matcher := NewMatcher(reg)
+
+	tests := []struct {
+		name        string
+		filters     QueryFilters
+		wantMatches int
+	}{
+		{
+			name:        "no filters matches all",
+			filters:     QueryFilters{},
+			wantMatches: 3,
+		},
+		{
+			name:        "name_exact filter",
+			filters:     QueryFilters{NameExact: "Alpha"},
+			wantMatches: 1,
+		},
+		{
+			name:        "name_matches regex filter",
+			filters:     QueryFilters{NameMatches: "^[AB]"},
+			wantMatches: 2,
+		},
+		{
+			name:        "kind_in filter",
+			filters:     QueryFilters{KindIn: []string{"function_declaration"}},
+			wantMatches: 3,
+		},
+		{
+			name:        "kind_in filter excludes non-matching kinds",
+			filters:     QueryFilters{KindIn: []string{"class_declaration"}},
+			wantMatches: 0,
+		},
+		{
+			name:        "combined name_exact and kind_in",
+			filters:     QueryFilters{NameExact: "Beta", KindIn: []string{"function_declaration"}},
+			wantMatches: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			query := &ASTQuery{
+				Pattern:  "func $NAME() {}",
+				Language: "go",
+				Filters:  tt.filters,
+			}
+			results, err := matcher.Match(ctx, query, result.Tree, []byte(content), "test.go")
+			if err != nil {
+				t.Fatalf("match failed: %v", err)
+			}
+			if len(results) != tt.wantMatches {
+				t.Errorf("expected %d matches, got %d", tt.wantMatches, len(results))
+			}
+		})
+	}
+}
+
 func TestQueryValidation(t *testing.T) {
 	reg := parser.NewRegistry()
 	defer reg.Close()

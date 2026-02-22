@@ -22,13 +22,11 @@ type ASTQuery struct {
 
 // QueryFilters provide additional filtering criteria.
 type QueryFilters struct {
-	HasChild    *ASTQuery `json:"has_child,omitempty"`
-	HasParent   *ASTQuery `json:"has_parent,omitempty"`
-	NameMatches string    `json:"name_matches,omitempty"`
-	NameExact   string    `json:"name_exact,omitempty"`
-	InFile      string    `json:"in_file,omitempty"`
-	NotInFile   string    `json:"not_in_file,omitempty"`
-	KindIn      []string  `json:"kind_in,omitempty"`
+	NameMatches string   `json:"name_matches,omitempty"`
+	NameExact   string   `json:"name_exact,omitempty"`
+	InFile      string   `json:"in_file,omitempty"`
+	NotInFile   string   `json:"not_in_file,omitempty"`
+	KindIn      []string `json:"kind_in,omitempty"`
 }
 
 // MatchResult represents a single match from a query.
@@ -259,7 +257,7 @@ func matchPatternHeuristic(node *sitter.Node, pattern *ParsedPattern, content []
 	}
 
 	// Match struct patterns (Go, C, C++)
-	if strings.Contains(patternLower, "struct ") || strings.Contains(patternLower, "type ") && strings.Contains(patternLower, "struct") {
+	if (strings.Contains(patternLower, "struct ") || strings.Contains(patternLower, "type ")) && strings.Contains(patternLower, "struct") {
 		if nodeType != "type_declaration" && nodeType != "struct_specifier" {
 			return false
 		}

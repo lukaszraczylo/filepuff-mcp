@@ -169,7 +169,7 @@ func (s *Server) registerTools() {
 			),
 			mcp.WithString("language",
 				mcp.Required(),
-				mcp.Description("Target language: go, typescript, javascript, python, c, cpp"),
+				mcp.Description("Target language: go, typescript, javascript, python, c, cpp, html, vue, elixir"),
 			),
 			mcp.WithArray("paths",
 				mcp.Description("Paths to search in (defaults to workspace root)"),

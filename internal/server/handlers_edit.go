@@ -33,6 +33,16 @@ func (s *Server) handleEdit(ctx context.Context, request mcp.CallToolRequest, ap
 		return mcp.NewToolResultError("operation is required"), nil
 	}
 
+	// Validate operation against known values
+	switch edit.EditOperation(operation) {
+	case edit.EditReplace, edit.EditInsertBefore, edit.EditInsertAfter, edit.EditDelete:
+		// valid
+	default:
+		return mcp.NewToolResultError(fmt.Sprintf(
+			"invalid operation %q: must be one of: replace, insert_before, insert_after, delete", operation,
+		)), nil
+	}
+
 	// Validate path
 	if !s.cfg.IsPathAllowed(file) {
 		return mcp.NewToolResultError("file is outside workspace root"), nil

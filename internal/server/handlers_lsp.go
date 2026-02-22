@@ -117,7 +117,7 @@ func (s *Server) handleFindDefinition(ctx context.Context, request mcp.CallToolR
 		output.WriteString(fmt.Sprintf("**%s:%d:%d**\n", filePath, loc.Range.Start.Line+1, loc.Range.Start.Character+1))
 
 		// Try to read a preview snippet
-		preview := readFilePreview(filePath, loc.Range.Start.Line+1, 3)
+		preview := s.readFilePreview(filePath, loc.Range.Start.Line+1, 3)
 		if preview != "" {
 			output.WriteString("```\n")
 			output.WriteString(preview)
@@ -184,7 +184,13 @@ func (s *Server) handleFindReferences(ctx context.Context, request mcp.CallToolR
 }
 
 // readFilePreview reads a few lines from a file around the given line.
-func readFilePreview(file string, line, contextLines int) string {
+// It validates that the file path is within the allowed workspace before reading.
+func (s *Server) readFilePreview(file string, line, contextLines int) string {
+	if !s.cfg.IsPathAllowed(file) {
+		s.logger.Warn("readFilePreview: path not allowed", "path", file)
+		return ""
+	}
+
 	content, err := os.ReadFile(file)
 	if err != nil {
 		return ""

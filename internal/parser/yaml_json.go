@@ -31,8 +31,8 @@ type JSONNode struct {
 // ParseYAML parses YAML content and returns a tree-sitter-compatible result
 func (r *Registry) ParseYAML(ctx context.Context, filename string, content []byte) (*ParseResult, error) {
 	// Check file size
-	if len(content) > MaxFileSize {
-		return nil, errors.NewFileTooLarge(filename, int64(len(content)), MaxFileSize)
+	if len(content) > maxFileSize {
+		return nil, errors.NewFileTooLarge(filename, int64(len(content)), maxFileSize)
 	}
 
 	// Parse YAML
@@ -57,8 +57,8 @@ func (r *Registry) ParseYAML(ctx context.Context, filename string, content []byt
 // ParseJSON parses JSON content and returns a tree-sitter-compatible result
 func (r *Registry) ParseJSON(ctx context.Context, filename string, content []byte) (*ParseResult, error) {
 	// Check file size
-	if len(content) > MaxFileSize {
-		return nil, errors.NewFileTooLarge(filename, int64(len(content)), MaxFileSize)
+	if len(content) > maxFileSize {
+		return nil, errors.NewFileTooLarge(filename, int64(len(content)), maxFileSize)
 	}
 
 	// Parse JSON to validate syntax
