@@ -27,6 +27,8 @@ func ExtractSymbols(tree *sitter.Tree, content []byte, lang protocol.Language, f
 		return extractCSymbols(root, content, filename)
 	case protocol.LangElixir:
 		return extractElixirSymbols(root, content, filename)
+	case protocol.LangRust:
+		return extractRustSymbols(root, content, filename)
 	default:
 		return nil
 	}
@@ -710,6 +712,133 @@ func extractElixirProtocol(n *sitter.Node, content []byte, filename string) *pro
 	return &protocol.Symbol{
 		Name:     protocolName,
 		Kind:     protocol.SymbolInterface,
+		Location: NodeLocation(n, filename),
+	}
+}
+
+// extractRustSymbols extracts symbols from Rust code.
+func extractRustSymbols(root *sitter.Node, content []byte, filename string) []protocol.Symbol {
+	var symbols []protocol.Symbol
+
+	WalkTree(root, func(n *sitter.Node) bool {
+		var symbol *protocol.Symbol
+
+		switch n.Type() {
+		case "function_item":
+			nameNode := n.ChildByFieldName("name")
+			if nameNode != nil {
+				symbol = &protocol.Symbol{
+					Name:     GetNodeText(nameNode, content),
+					Kind:     protocol.SymbolFunction,
+					Location: NodeLocation(n, filename),
+				}
+			}
+		case "struct_item":
+			nameNode := n.ChildByFieldName("name")
+			if nameNode != nil {
+				symbol = &protocol.Symbol{
+					Name:     GetNodeText(nameNode, content),
+					Kind:     protocol.SymbolStruct,
+					Location: NodeLocation(n, filename),
+				}
+			}
+		case "enum_item":
+			nameNode := n.ChildByFieldName("name")
+			if nameNode != nil {
+				symbol = &protocol.Symbol{
+					Name:     GetNodeText(nameNode, content),
+					Kind:     protocol.SymbolEnum,
+					Location: NodeLocation(n, filename),
+				}
+			}
+		case "trait_item":
+			nameNode := n.ChildByFieldName("name")
+			if nameNode != nil {
+				symbol = &protocol.Symbol{
+					Name:     GetNodeText(nameNode, content),
+					Kind:     protocol.SymbolTrait,
+					Location: NodeLocation(n, filename),
+				}
+			}
+		case "impl_item":
+			symbol = extractRustImpl(n, content, filename)
+		case "type_item":
+			nameNode := n.ChildByFieldName("name")
+			if nameNode != nil {
+				symbol = &protocol.Symbol{
+					Name:     GetNodeText(nameNode, content),
+					Kind:     protocol.SymbolType,
+					Location: NodeLocation(n, filename),
+				}
+			}
+		case "const_item":
+			nameNode := n.ChildByFieldName("name")
+			if nameNode != nil {
+				symbol = &protocol.Symbol{
+					Name:     GetNodeText(nameNode, content),
+					Kind:     protocol.SymbolConstant,
+					Location: NodeLocation(n, filename),
+				}
+			}
+		case "static_item":
+			nameNode := n.ChildByFieldName("name")
+			if nameNode != nil {
+				symbol = &protocol.Symbol{
+					Name:     GetNodeText(nameNode, content),
+					Kind:     protocol.SymbolVariable,
+					Location: NodeLocation(n, filename),
+				}
+			}
+		case "macro_definition":
+			nameNode := n.ChildByFieldName("name")
+			if nameNode != nil {
+				symbol = &protocol.Symbol{
+					Name:     GetNodeText(nameNode, content) + " (macro)",
+					Kind:     protocol.SymbolFunction,
+					Location: NodeLocation(n, filename),
+				}
+			}
+		case "mod_item":
+			nameNode := n.ChildByFieldName("name")
+			if nameNode != nil {
+				symbol = &protocol.Symbol{
+					Name:     GetNodeText(nameNode, content),
+					Kind:     protocol.SymbolModule,
+					Location: NodeLocation(n, filename),
+				}
+			}
+		}
+
+		if symbol != nil {
+			if doc := ExtractDocComment(n, content, protocol.LangRust); doc != nil {
+				symbol.Doc = FormatDocComment(doc)
+			}
+			symbols = append(symbols, *symbol)
+		}
+
+		return true
+	})
+
+	return symbols
+}
+
+// extractRustImpl extracts an impl block symbol from Rust code.
+func extractRustImpl(n *sitter.Node, content []byte, filename string) *protocol.Symbol {
+	typeNode := n.ChildByFieldName("type")
+	traitNode := n.ChildByFieldName("trait")
+
+	var name string
+	if traitNode != nil && typeNode != nil {
+		name = "impl " + GetNodeText(traitNode, content) + " for " + GetNodeText(typeNode, content)
+	} else if typeNode != nil {
+		name = "impl " + GetNodeText(typeNode, content)
+	} else {
+		return nil
+	}
+
+	return &protocol.Symbol{
+		Name:     name,
+		Kind:     protocol.SymbolType,
 		Location: NodeLocation(n, filename),
 	}
 }

@@ -89,7 +89,8 @@ func (s *Server) registerTools() {
 	// Register ping tool for health checks
 	s.mcp.AddTool(
 		mcp.NewTool("ping",
-			mcp.WithDescription("Health check - returns pong to verify the server is running"),
+			mcp.WithDescription("Health check - returns pong to verify the server is running.\n\n"+
+				"Returns: \"pong\" text string."),
 			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		s.handlePing,
@@ -99,7 +100,10 @@ func (s *Server) registerTools() {
 	if s.searcher != nil {
 		s.mcp.AddTool(
 			mcp.NewTool("file_search",
-				mcp.WithDescription("Search for text patterns in files using ripgrep. Supports regex patterns, file type filtering, and context lines."),
+				mcp.WithDescription("Search for text patterns in files using ripgrep. Supports regex patterns, file type filtering, and context lines.\n\n"+
+					"Returns: Results grouped by file with match context. Format: \"Found N matches in M files:\" followed by file sections, "+
+					"each with matching lines prefixed by \"L{line}│\" and context lines prefixed by \"   │\".\n\n"+
+					"Example: {\"pattern\": \"func.*Error\", \"file_types\": [\"go\"], \"max_results\": 20}"),
 				mcp.WithReadOnlyHintAnnotation(true),
 				mcp.WithString("pattern",
 					mcp.Required(),
@@ -133,7 +137,16 @@ func (s *Server) registerTools() {
 	// Register file_read tool
 	s.mcp.AddTool(
 		mcp.NewTool("file_read",
-			mcp.WithDescription("Read a file's contents with optional line range and AST symbol summary"),
+			mcp.WithDescription("Read a file's contents with optional line range and AST symbol summary.\n\n"+
+				"Returns: File content with numbered lines (format: \"  12│ line text\"). "+
+				"When include_ast=true: prepends symbol summary (\"**file.go** (N lines, go)\\nSymbols:\\n  func Name  L12\\n  struct Config  L45\"). "+
+				"When symbols_only=true: returns only the symbol summary (~95% fewer tokens). "+
+				"When max_lines is set: truncates output with \"[... N more lines omitted]\" notice.\n\n"+
+				"Examples:\n"+
+				"  Full file: {\"path\": \"main.go\"}\n"+
+				"  With AST: {\"path\": \"main.go\", \"include_ast\": true}\n"+
+				"  Symbols only: {\"path\": \"main.go\", \"include_ast\": true, \"symbols_only\": true}\n"+
+				"  Line range: {\"path\": \"main.go\", \"line_start\": 10, \"line_end\": 50}"),
 			mcp.WithReadOnlyHintAnnotation(true),
 			mcp.WithString("path",
 				mcp.Required(),
@@ -161,7 +174,13 @@ func (s *Server) registerTools() {
 	// Register ast_query tool
 	s.mcp.AddTool(
 		mcp.NewTool("ast_query",
-			mcp.WithDescription("Search for AST patterns in code files. Use code patterns with $VAR placeholders to match and capture code structures like functions, classes, and types."),
+			mcp.WithDescription("Search for AST patterns in code files. Use code patterns with $VAR placeholders to match and capture code structures like functions, classes, and types.\n\n"+
+				"Returns: \"Found N match(es):\" followed by entries in format \"**file:line** (node_type)\" with code blocks "+
+				"and captured variables ($NAME=value). Returns \"No matches found.\" when no results.\n\n"+
+				"Examples:\n"+
+				"  Go error funcs: {\"pattern\": \"func $NAME($$$ARGS) error\", \"language\": \"go\"}\n"+
+				"  Python classes:  {\"pattern\": \"class $NAME: $$$BODY\", \"language\": \"python\"}\n"+
+				"  Named function: {\"pattern\": \"func $NAME($$$ARGS)\", \"language\": \"go\", \"name_exact\": \"NewServer\"}"),
 			mcp.WithReadOnlyHintAnnotation(true),
 			mcp.WithString("pattern",
 				mcp.Required(),
@@ -169,7 +188,7 @@ func (s *Server) registerTools() {
 			),
 			mcp.WithString("language",
 				mcp.Required(),
-				mcp.Description("Target language: go, typescript, javascript, python, c, cpp, html, vue, elixir"),
+				mcp.Description("Target language: go, typescript, javascript, python, c, cpp, html, vue, elixir, rust"),
 			),
 			mcp.WithArray("paths",
 				mcp.Description("Paths to search in (defaults to workspace root)"),
@@ -197,7 +216,10 @@ func (s *Server) registerTools() {
 		// Register symbol_at tool
 		s.mcp.AddTool(
 			mcp.NewTool("symbol_at",
-				mcp.WithDescription("Get information about the symbol at a specific position in a file. Returns type, documentation, and definition location using LSP when available."),
+				mcp.WithDescription("Get information about the symbol at a specific position in a file. Returns type, documentation, and definition location using LSP when available.\n\n"+
+					"Returns: \"**Symbol Information**\" followed by hover/type information from LSP, or \"**Symbol Information** (AST fallback)\" "+
+					"with node type and text when LSP unavailable. Returns \"No symbol information available at this position.\" when nothing is found.\n\n"+
+					"Example: {\"file\": \"server.go\", \"line\": 45, \"column\": 6}"),
 				mcp.WithReadOnlyHintAnnotation(true),
 				mcp.WithString("file",
 					mcp.Required(),
@@ -218,7 +240,10 @@ func (s *Server) registerTools() {
 		// Register find_definition tool
 		s.mcp.AddTool(
 			mcp.NewTool("find_definition",
-				mcp.WithDescription("Find the definition of the symbol at a specific position. Uses LSP to locate where a function, variable, type, etc. is defined."),
+				mcp.WithDescription("Find the definition of the symbol at a specific position. Uses LSP to locate where a function, variable, type, etc. is defined.\n\n"+
+					"Returns: \"Found N definition(s):\" with entries showing \"**file:line:column**\" and a 3-line code preview "+
+					"with the target line marked by \">\". Returns \"No definition found.\" when the symbol has no definition.\n\n"+
+					"Example: {\"file\": \"handler.go\", \"line\": 23, \"column\": 10}"),
 				mcp.WithReadOnlyHintAnnotation(true),
 				mcp.WithString("file",
 					mcp.Required(),
@@ -239,7 +264,10 @@ func (s *Server) registerTools() {
 		// Register find_references tool
 		s.mcp.AddTool(
 			mcp.NewTool("find_references",
-				mcp.WithDescription("Find all references to the symbol at a specific position. Uses LSP to locate all usages of a function, variable, type, etc."),
+				mcp.WithDescription("Find all references to the symbol at a specific position. Uses LSP to locate all usages of a function, variable, type, etc.\n\n"+
+					"Returns: \"Found N reference(s):\" grouped by file, each showing \"**file** (count)\" with locations as "+
+					"\"L{line}:{column}\". Returns \"No references found.\" when no usages exist.\n\n"+
+					"Example: {\"file\": \"types.go\", \"line\": 5, \"column\": 6}"),
 				mcp.WithReadOnlyHintAnnotation(true),
 				mcp.WithString("file",
 					mcp.Required(),
@@ -264,7 +292,13 @@ func (s *Server) registerTools() {
 	// Register edit tools
 	s.mcp.AddTool(
 		mcp.NewTool("edit_preview",
-			mcp.WithDescription("Preview an edit without applying it. Uses AST-aware editing for code files (Go, TypeScript, JavaScript, Python, C, C++), and text-based editing for other files (Markdown, JSON, YAML, config files, etc.)."),
+			mcp.WithDescription("Preview an edit without applying it. Uses AST-aware editing for code files (Go, TypeScript, JavaScript, Python, C, C++, Rust), and text-based editing for other files (Markdown, JSON, YAML, config files, etc.).\n\n"+
+				"Returns: \"**Edit Preview**\" followed by a unified diff showing proposed changes. Does not modify the file. "+
+				"For code files: uses AST-aware mode with syntax validation. For other files: uses text-based mode.\n\n"+
+				"Examples:\n"+
+				"  AST mode: {\"file\": \"main.go\", \"operation\": \"replace\", \"selector_kind\": \"function_declaration\", \"selector_name\": \"Hello\", \"new_content\": \"func Hello() {\\n\\treturn\\n}\"}\n"+
+				"  Text mode: {\"file\": \"README.md\", \"operation\": \"replace\", \"selector_text\": \"## Old Header\", \"new_content\": \"## New Header\"}\n"+
+				"  Line range: {\"file\": \"config.yaml\", \"operation\": \"replace\", \"selector_line\": 5, \"selector_line_end\": 10, \"new_content\": \"key: value\"}"),
 			mcp.WithString("file",
 				mcp.Required(),
 				mcp.Description("Path to the file to edit"),
@@ -306,7 +340,13 @@ func (s *Server) registerTools() {
 
 	s.mcp.AddTool(
 		mcp.NewTool("edit_apply",
-			mcp.WithDescription("Apply an edit to a file. Uses AST-aware editing for code files (Go, TypeScript, JavaScript, Python, C, C++) with syntax validation, and text-based editing for other files (Markdown, JSON, YAML, config files, etc.)."),
+			mcp.WithDescription("Apply an edit to a file. Uses AST-aware editing for code files (Go, TypeScript, JavaScript, Python, C, C++, Rust) with syntax validation, and text-based editing for other files (Markdown, JSON, YAML, config files, etc.).\n\n"+
+				"Returns: \"**Edit Applied Successfully**\" followed by a unified diff of the changes made. "+
+				"For code files, validates syntax before writing — returns an error if the edit would produce invalid syntax.\n\n"+
+				"Examples:\n"+
+				"  AST mode: {\"file\": \"main.go\", \"operation\": \"replace\", \"selector_kind\": \"function_declaration\", \"selector_name\": \"Hello\", \"new_content\": \"func Hello() {\\n\\treturn\\n}\"}\n"+
+				"  Text mode: {\"file\": \"README.md\", \"operation\": \"replace\", \"selector_text\": \"## Old Header\", \"new_content\": \"## New Header\"}\n"+
+				"  Line range: {\"file\": \"config.yaml\", \"operation\": \"replace\", \"selector_line\": 5, \"selector_line_end\": 10, \"new_content\": \"key: value\"}"),
 			mcp.WithString("file",
 				mcp.Required(),
 				mcp.Description("Path to the file to edit"),

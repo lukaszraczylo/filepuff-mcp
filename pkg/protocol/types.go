@@ -32,6 +32,8 @@ const (
 	SymbolProperty  SymbolKind = "property"
 	SymbolModule    SymbolKind = "module"
 	SymbolPackage   SymbolKind = "package"
+	SymbolEnum      SymbolKind = "enum"
+	SymbolTrait     SymbolKind = "trait"
 )
 
 // Symbol represents a code symbol (function, class, variable, etc.).
@@ -63,6 +65,7 @@ const (
 	LangJSON       Language = "json"
 	LangYAML       Language = "yaml"
 	LangElixir     Language = "elixir"
+	LangRust       Language = "rust"
 	LangUnknown    Language = "unknown"
 )
 
@@ -92,6 +95,8 @@ func DetectLanguage(filename string) Language {
 		return LangYAML
 	case ".ex", ".exs":
 		return LangElixir
+	case ".rs":
+		return LangRust
 	default:
 		return LangUnknown
 	}

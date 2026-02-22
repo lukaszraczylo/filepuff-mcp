@@ -172,11 +172,9 @@ func (e *Engine) performASTEdit(ctx context.Context, edit *ASTEdit, apply bool) 
 	diff := e.generateDiff(string(content), string(newContent), edit.File)
 
 	result := &EditResult{
-		Success:         true,
-		Diff:            diff,
-		OriginalContent: string(content),
-		NewContent:      string(newContent),
-		Applied:         false,
+		Success: true,
+		Diff:    diff,
+		Applied: false,
 	}
 
 	// Apply changes if requested
@@ -231,11 +229,9 @@ func (e *Engine) performTextEdit(_ context.Context, edit *ASTEdit, apply bool) (
 	diff := e.generateDiff(string(content), string(newContent), edit.File)
 
 	result := &EditResult{
-		Success:         true,
-		Diff:            diff,
-		OriginalContent: string(content),
-		NewContent:      string(newContent),
-		Applied:         false,
+		Success: true,
+		Diff:    diff,
+		Applied: false,
 	}
 
 	// Apply changes if requested
@@ -568,14 +564,22 @@ func indentContent(content string, indent string) string {
 	return strings.Join(lines, "\n")
 }
 
+// diffLine represents a single line in the diff with its type and content.
+type diffLine struct {
+	op   diffmatchpatch.Operation
+	text string // line content without trailing newline
+	oldN int    // 1-based line number in original (0 if insert)
+	newN int    // 1-based line number in modified (0 if delete)
+}
+
 // generateDiff creates a unified diff between original and modified content.
-// Uses line-level Myers diff algorithm for accurate and readable diffs.
+// Uses line-level Myers diff algorithm and outputs a proper unified diff
+// with context lines (3 before/after each change, merging close hunks).
 func (e *Engine) generateDiff(original, modified, filename string) string {
 	dmp := e.dmp
 
 	// Use line-level diffing: encode each line as a single character,
 	// diff the encoded strings, then decode back to real lines.
-	// This prevents character-level diffs from splitting lines incorrectly.
 	chars1, chars2, lineArray := dmp.DiffLinesToChars(original, modified)
 	diffs := dmp.DiffMain(chars1, chars2, false)
 	diffs = dmp.DiffCharsToLines(diffs, lineArray)
@@ -583,30 +587,117 @@ func (e *Engine) generateDiff(original, modified, filename string) string {
 	// Cleanup for readability
 	diffs = dmp.DiffCleanupSemantic(diffs)
 
-	// Convert to unified diff format
+	// Flatten diffs into individual lines with line numbers
+	var lines []diffLine
+	oldLine := 1
+	newLine := 1
+	for _, d := range diffs {
+		rawLines := strings.SplitAfter(d.Text, "\n")
+		for _, raw := range rawLines {
+			if raw == "" {
+				continue
+			}
+			text := strings.TrimSuffix(raw, "\n")
+			switch d.Type {
+			case diffmatchpatch.DiffEqual:
+				lines = append(lines, diffLine{op: d.Type, text: text, oldN: oldLine, newN: newLine})
+				oldLine++
+				newLine++
+			case diffmatchpatch.DiffDelete:
+				lines = append(lines, diffLine{op: d.Type, text: text, oldN: oldLine})
+				oldLine++
+			case diffmatchpatch.DiffInsert:
+				lines = append(lines, diffLine{op: d.Type, text: text, newN: newLine})
+				newLine++
+			}
+		}
+	}
+
+	// Identify indices of changed lines
+	const contextSize = 3
+	var changedIndices []int
+	for i, l := range lines {
+		if l.op != diffmatchpatch.DiffEqual {
+			changedIndices = append(changedIndices, i)
+		}
+	}
+
+	if len(changedIndices) == 0 {
+		return "" // no changes
+	}
+
+	// Build inclusion ranges: for each changed line, include contextSize lines before/after.
+	// Merge overlapping or adjacent ranges (gap <= 2*contextSize = 6 context lines).
+	type indexRange struct{ start, end int } // inclusive
+	var ranges []indexRange
+	for _, ci := range changedIndices {
+		rStart := ci - contextSize
+		if rStart < 0 {
+			rStart = 0
+		}
+		rEnd := ci + contextSize
+		if rEnd >= len(lines) {
+			rEnd = len(lines) - 1
+		}
+		if len(ranges) > 0 && rStart <= ranges[len(ranges)-1].end+1 {
+			// Merge with previous range
+			ranges[len(ranges)-1].end = rEnd
+		} else {
+			ranges = append(ranges, indexRange{rStart, rEnd})
+		}
+	}
+
+	// Emit unified diff
 	var buf bytes.Buffer
 	buf.WriteString(fmt.Sprintf("--- %s\n", filename))
 	buf.WriteString(fmt.Sprintf("+++ %s\n", filename))
 
-	for _, diff := range diffs {
-		// SplitAfter preserves the trailing \n on each line, so we can
-		// distinguish real lines from a trailing empty split artifact.
-		lines := strings.SplitAfter(diff.Text, "\n")
-		for _, line := range lines {
-			if line == "" {
-				continue
-			}
-
-			// Remove trailing newline for display — we add our own.
-			cleanLine := strings.TrimSuffix(line, "\n")
-
-			switch diff.Type {
-			case diffmatchpatch.DiffDelete:
-				buf.WriteString(fmt.Sprintf("-%s\n", cleanLine))
-			case diffmatchpatch.DiffInsert:
-				buf.WriteString(fmt.Sprintf("+%s\n", cleanLine))
+	for _, r := range ranges {
+		// Determine hunk header line numbers
+		var oldStart, oldCount, newStart, newCount int
+		for i := r.start; i <= r.end; i++ {
+			l := lines[i]
+			switch l.op {
 			case diffmatchpatch.DiffEqual:
-				buf.WriteString(fmt.Sprintf(" %s\n", cleanLine))
+				if oldCount == 0 {
+					oldStart = l.oldN
+				}
+				if newCount == 0 {
+					newStart = l.newN
+				}
+				oldCount++
+				newCount++
+			case diffmatchpatch.DiffDelete:
+				if oldCount == 0 {
+					oldStart = l.oldN
+				}
+				if newCount == 0 {
+					// Set newStart from context or next available
+					newStart = l.oldN // approximate
+				}
+				oldCount++
+			case diffmatchpatch.DiffInsert:
+				if newCount == 0 {
+					newStart = l.newN
+				}
+				if oldCount == 0 {
+					oldStart = l.newN // approximate
+				}
+				newCount++
+			}
+		}
+
+		buf.WriteString(fmt.Sprintf("@@ -%d,%d +%d,%d @@\n", oldStart, oldCount, newStart, newCount))
+
+		for i := r.start; i <= r.end; i++ {
+			l := lines[i]
+			switch l.op {
+			case diffmatchpatch.DiffEqual:
+				buf.WriteString(fmt.Sprintf(" %s\n", l.text))
+			case diffmatchpatch.DiffDelete:
+				buf.WriteString(fmt.Sprintf("-%s\n", l.text))
+			case diffmatchpatch.DiffInsert:
+				buf.WriteString(fmt.Sprintf("+%s\n", l.text))
 			}
 		}
 	}

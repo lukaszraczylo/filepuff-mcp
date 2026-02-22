@@ -56,7 +56,7 @@ func (s *Server) handleASTQuery(ctx context.Context, request mcp.CallToolRequest
 	// Find files to search based on language
 	exts := languageToExtensions(language)
 	if len(exts) == 0 {
-		return mcp.NewToolResultError(fmt.Sprintf("unsupported language: %s (supported: go, typescript, javascript, python, c, cpp, html, vue, elixir)", language)), nil
+		return mcp.NewToolResultError(fmt.Sprintf("unsupported language: %s (supported: go, typescript, javascript, python, c, cpp, html, vue, elixir, rust)", language)), nil
 	}
 
 	var allResults []query.MatchResult
@@ -205,6 +205,10 @@ func symbolKindIcon(kind protocol.SymbolKind) string {
 		return "mod"
 	case protocol.SymbolPackage:
 		return "pkg"
+	case protocol.SymbolEnum:
+		return "enum"
+	case protocol.SymbolTrait:
+		return "trait"
 	default:
 		return "sym"
 	}
@@ -231,6 +235,8 @@ func languageToExtensions(language string) []string {
 		return []string{".vue"}
 	case "elixir":
 		return []string{".ex", ".exs"}
+	case "rust":
+		return []string{".rs"}
 	default:
 		return nil
 	}

@@ -48,6 +48,8 @@ func ExtractDocComment(n *sitter.Node, content []byte, lang protocol.Language) *
 		return extractCDocComment(n, content)
 	case protocol.LangElixir:
 		return extractElixirDocComment(n, content)
+	case protocol.LangRust:
+		return extractRustDocComment(n, content)
 	default:
 		return nil
 	}
@@ -549,6 +551,64 @@ func cleanPythonDocstring(doc string) string {
 	doc = strings.TrimSuffix(doc, `'''`)
 
 	return strings.TrimSpace(doc)
+}
+
+// extractRustDocComment extracts Rust documentation comments (/// style).
+func extractRustDocComment(n *sitter.Node, content []byte) *DocComment {
+	comments := collectPrecedingComments(n, content, []string{"line_comment"})
+	if len(comments) == 0 {
+		return nil
+	}
+
+	// Filter for /// doc comments only
+	var docComments []*sitter.Node
+	for _, c := range comments {
+		text := GetNodeText(c, content)
+		trimmed := strings.TrimSpace(text)
+		if strings.HasPrefix(trimmed, "///") {
+			docComments = append(docComments, c)
+		}
+	}
+
+	if len(docComments) == 0 {
+		return nil
+	}
+
+	var parts []string
+	var raw []string
+	startLine := -1
+	endLine := -1
+
+	for _, c := range docComments {
+		text := GetNodeText(c, content)
+		raw = append(raw, text)
+
+		if startLine == -1 {
+			startLine = int(c.StartPoint().Row) + 1
+		}
+		endLine = int(c.EndPoint().Row) + 1
+
+		// Clean /// prefix
+		cleaned := strings.TrimSpace(text)
+		cleaned = strings.TrimPrefix(cleaned, "///")
+		if len(cleaned) > 0 && cleaned[0] == ' ' {
+			cleaned = cleaned[1:]
+		}
+		parts = append(parts, cleaned)
+	}
+
+	if len(parts) == 0 {
+		return nil
+	}
+
+	return &DocComment{
+		Text:      strings.Join(parts, "\n"),
+		Raw:       strings.Join(raw, "\n"),
+		Style:     CommentStyleDoxygen,
+		Tags:      nil,
+		StartLine: startLine,
+		EndLine:   endLine,
+	}
 }
 
 // extractElixirDocComment extracts Elixir documentation from @doc and @moduledoc attributes.

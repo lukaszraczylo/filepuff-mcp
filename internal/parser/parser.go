@@ -18,6 +18,7 @@ import (
 	"github.com/smacker/go-tree-sitter/html"
 	"github.com/smacker/go-tree-sitter/javascript"
 	"github.com/smacker/go-tree-sitter/python"
+	"github.com/smacker/go-tree-sitter/rust"
 	"github.com/smacker/go-tree-sitter/typescript/typescript"
 
 	"github.com/lukaszraczylo/mcp-filepuff/pkg/errors"
@@ -117,10 +118,12 @@ func getLanguage(lang protocol.Language) (*sitter.Language, error) {
 		return html.GetLanguage(), nil
 	case protocol.LangElixir:
 		return elixir.GetLanguage(), nil
+	case protocol.LangRust:
+		return rust.GetLanguage(), nil
 	default:
 		return nil, errors.New(errors.ErrInvalidLanguage, fmt.Sprintf("language %s is not supported", lang)).
 			WithContext("language", string(lang)).
-			WithRemediation("Supported languages: Go, TypeScript, JavaScript, Python, C, C++, HTML, Vue, Elixir")
+			WithRemediation("Supported languages: Go, TypeScript, JavaScript, Python, C, C++, HTML, Vue, Elixir, Rust")
 	}
 }
 

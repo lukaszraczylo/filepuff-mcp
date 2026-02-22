@@ -85,6 +85,9 @@ var DefaultServerConfigs = map[protocol.Language]ServerConfig{
 	protocol.LangCpp: {
 		Command: []string{"clangd"},
 	},
+	protocol.LangRust: {
+		Command: []string{"rust-analyzer"},
+	},
 }
 
 // AllowedLSPBinaries is a whitelist of allowed LSP server binary names.
@@ -602,6 +605,8 @@ func languageToLSPID(lang protocol.Language) string {
 		return "c"
 	case protocol.LangCpp:
 		return "cpp"
+	case protocol.LangRust:
+		return "rust"
 	default:
 		return string(lang)
 	}

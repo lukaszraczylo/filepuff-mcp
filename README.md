@@ -104,6 +104,39 @@ After downloading or building the binary, configure it in Claude Code:
 
 See the [Claude Code MCP documentation](https://code.claude.com/docs/en/mcp) for more details.
 
+### Recommended Claude Code Configuration
+
+#### Selective Tool Deferral
+
+For optimal performance, keep the most frequently used tools loaded at startup and defer the rest. This follows [Anthropic's recommended practice](https://www.anthropic.com/engineering/advanced-tool-use) of loading 3-5 high-use tools immediately:
+
+```json
+{
+  "mcpServers": {
+    "filepuff": {
+      "command": "mcp-filepuff",
+      "args": ["-workspace", "."],
+      "alwaysAllow": ["file_read", "file_search", "edit_apply", "edit_preview"]
+    }
+  }
+}
+```
+
+This keeps `file_read`, `file_search`, `edit_apply`, and `edit_preview` immediately available while deferring less frequently used tools (`ping`, `ast_query`, `symbol_at`, `find_definition`, `find_references`).
+
+#### System Prompt Guidance
+
+Add the following to your `CLAUDE.md` to help Claude understand the available tool categories:
+
+```markdown
+You have access to filepuff MCP tools providing:
+- File reading with AST symbol summaries (file_read)
+- Fast regex search powered by ripgrep (file_search)
+- Structural code pattern matching across 9+ languages (ast_query)
+- LSP-powered go-to-definition, find-references, and symbol info (find_definition, find_references, symbol_at)
+- AST-aware file editing with syntax validation and preview (edit_preview, edit_apply)
+```
+
 ## Usage
 
 ### Running the Server (Standalone)

@@ -47,9 +47,10 @@ Health check - returns pong to verify the server is running
 {"tool": "ping"}
 ```
 
+**Returns:** `"pong"` text string.
+
 **Notes:**
 
-- Returns: "pong"
 - Use to verify server connectivity
 
 ---
@@ -83,6 +84,8 @@ Search for text patterns in files using ripgrep. Supports regex patterns, file t
 ```json
 {"pattern": "TODO", "ignore_case": true, "context_lines": 3}
 ```
+
+**Returns:** Results grouped by file with match context. Format: `"Found N matches in M files:"` followed by file sections, each with matching lines prefixed by `"L{line}│"` and context lines prefixed by `"   │"`.
 
 **Notes:**
 
@@ -128,6 +131,8 @@ Read a file's contents with optional line range and AST symbol summary
 {"path": "large_file.go", "max_lines": 100}
 ```
 
+**Returns:** File content with numbered lines (format: `"  12│ line text"`). When `include_ast=true`: prepends symbol summary (`"**file.go** (N lines, go)\nSymbols:\n  func Name  L12\n  struct Config  L45"`). When `symbols_only=true`: returns only the symbol summary (~95% fewer tokens). When `max_lines` is set: truncates output with `"[... N more lines omitted]"` notice.
+
 **Notes:**
 
 - symbols_only mode reduces token usage by ~90-98%
@@ -170,6 +175,8 @@ Search for AST patterns in code files. Use code patterns with $VAR placeholders 
 {"pattern": "function $NAME($PROPS) { $$$BODY }", "language": "javascript", "name_matches": "^[A-Z]"}
 ```
 
+**Returns:** `"Found N match(es):"` followed by entries in format `"**file:line** (node_type)"` with code blocks and captured variables (`$NAME=value`). Returns `"No matches found."` when no results.
+
 **Notes:**
 
 - $NAME captures identifiers
@@ -201,6 +208,8 @@ Get information about the symbol at a specific position in a file. Returns type,
 {"file": "server.go", "line": 25, "column": 10}
 ```
 
+**Returns:** `"**Symbol Information**"` followed by hover/type information from LSP, or `"**Symbol Information** (AST fallback)"` with node type and text when LSP unavailable. Returns `"No symbol information available at this position."` when nothing is found.
+
 **Notes:**
 
 - Requires LSP server for full type information
@@ -228,10 +237,11 @@ Find the definition of the symbol at a specific position. Uses LSP to locate whe
 {"file": "server.go", "line": 42, "column": 15}
 ```
 
+**Returns:** `"Found N definition(s):"` with entries showing `"**file:line:column**"` and a 3-line code preview with the target line marked by `">"`. Returns `"No definition found."` when the symbol has no definition.
+
 **Notes:**
 
 - Requires language server for the file type
-- Returns file path, line, and column of definition
 - Shows code preview at definition location
 
 ---
@@ -260,6 +270,8 @@ Find all references to the symbol at a specific position. Uses LSP to locate all
 ```json
 {"file": "server.go", "line": 42, "column": 15, "include_declaration": false}
 ```
+
+**Returns:** `"Found N reference(s):"` grouped by file, each showing `"**file** (count)"` with locations as `"L{line}:{column}"`. Returns `"No references found."` when no usages exist.
 
 **Notes:**
 
@@ -305,10 +317,10 @@ Preview an edit without applying it. Uses AST-aware editing for code files (Go, 
 {"file": "package.json", "operation": "replace", "selector_pattern": "\\"version\\":\\\\s*\\"[^\\"]+\\"", "new_content": "\\"version\\": \\"2.0.0\\""}
 ```
 
+**Returns:** `"**Edit Preview**"` followed by a unified diff showing proposed changes. Does not modify the file. For code files: uses AST-aware mode with syntax validation. For other files: uses text-based mode.
+
 **Notes:**
 
-- Returns a diff showing proposed changes
-- Does not modify the file
 - Use to validate changes before applying
 
 ---
@@ -344,9 +356,10 @@ Apply an edit to a file. Uses AST-aware editing for code files (Go, TypeScript, 
 {"file": "config.yaml", "operation": "replace", "selector_line": 5, "selector_line_end": 10, "new_content": "database:\\n  host: production.db.example.com\\n  port: 5432"}
 ```
 
+**Returns:** `"**Edit Applied Successfully**"` followed by a unified diff of the changes made. For code files, validates syntax before writing — returns an error if the edit would produce invalid syntax.
+
 **Notes:**
 
-- For code files: validates syntax before and after edit
 - Preserves file permissions
 - Uses atomic writes for safety
 - File locking prevents concurrent edits
