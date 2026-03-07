@@ -109,6 +109,19 @@ release:
     ```
 
 
+dockers:
+  - image_templates:
+      - "ghcr.io/lukaszraczylo/filepuff-mcp:{{ .Tag }}"
+      - "ghcr.io/lukaszraczylo/filepuff-mcp:latest"
+    ids:
+      - mcp-filepuff-cgo
+    use: buildx
+    build_flag_templates:
+      - "--platform=linux/amd64"
+    goarch: amd64
+    goos: linux
+    dockerfile: Dockerfile
+
 signs:
   - cmd: cosign
     signature: "${artifact}.sigstore.json"
@@ -119,5 +132,14 @@ signs:
       - "--yes"
     artifacts: checksum
     output: true
+
+docker_signs:
+  - cmd: cosign
+    artifacts: manifests
+    output: true
+    args:
+      - "sign"
+      - "--yes"
+      - "${artifact}"
 
 
