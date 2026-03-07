@@ -29,6 +29,30 @@ This script will:
 - Install to `~/.local/bin` (or `/usr/local/bin` if needed)
 - Make the binary executable
 
+### Docker
+
+```bash
+docker pull ghcr.io/lukaszraczylo/filepuff-mcp:latest
+```
+
+The MCP server communicates over stdio. Mount your workspace and run with `-i`:
+
+```bash
+docker run -i --rm -v /path/to/workspace:/workspace ghcr.io/lukaszraczylo/filepuff-mcp:latest -workspace /workspace
+```
+
+Claude Code configuration (`.claude/settings.json`):
+```json
+{
+  "mcpServers": {
+    "filepuff": {
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "-v", ".:/workspace", "ghcr.io/lukaszraczylo/filepuff-mcp:latest", "-workspace", "/workspace"]
+    }
+  }
+}
+```
+
 ### Manual Installation
 
 Download pre-built binaries from the [releases page](https://github.com/lukaszraczylo/filepuff-mcp/releases):
