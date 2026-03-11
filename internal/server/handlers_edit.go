@@ -11,6 +11,17 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
+// unescapeNewlines converts literal \n, \t, \" sequences to actual characters.
+// This handles cases where MCP clients send double-escaped JSON strings.
+func unescapeNewlines(s string) string {
+	// Replace common escape sequences
+	s = strings.ReplaceAll(s, "\\n", "\n")
+	s = strings.ReplaceAll(s, "\\t", "\t")
+	s = strings.ReplaceAll(s, "\\\"", "\"")
+	s = strings.ReplaceAll(s, "\\\\", "\\")
+	return s
+}
+
 // handleEditPreview handles the edit_preview tool.
 func (s *Server) handleEditPreview(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return s.handleEdit(ctx, request, false)
@@ -52,10 +63,15 @@ func (s *Server) handleEdit(ctx context.Context, request mcp.CallToolRequest, ap
 	// The edit engine automatically detects whether to use AST or text mode.
 
 	// Build edit request with both AST and text-mode selectors
+	newContent := request.GetString("new_content", "")
+
+	// Unescape common escape sequences that may be double-encoded by MCP clients
+	newContent = unescapeNewlines(newContent)
+
 	astEdit := &edit.ASTEdit{
 		File:       file,
 		Operation:  edit.EditOperation(operation),
-		NewContent: request.GetString("new_content", ""),
+		NewContent: newContent,
 		Selector: edit.ASTSelector{
 			// AST-mode selectors
 			Kind:   request.GetString("selector_kind", ""),
