@@ -495,6 +495,11 @@ func (e *Engine) applyEdit(edit *ASTEdit, node *sitter.Node, content []byte) ([]
 	case EditReplace:
 		result = append(result, content[:startByte]...)
 		result = append(result, []byte(newContent)...)
+		// Preserve trailing newline: if selection ended with \n but replacement doesn't,
+		// re-add it to prevent line merging
+		if endByte > startByte && content[endByte-1] == '\n' && !strings.HasSuffix(newContent, "\n") {
+			result = append(result, '\n')
+		}
 		result = append(result, content[endByte:]...)
 
 	case EditInsertBefore:
@@ -508,8 +513,13 @@ func (e *Engine) applyEdit(edit *ASTEdit, node *sitter.Node, content []byte) ([]
 
 	case EditInsertAfter:
 		insertion := newContent
-		if !strings.HasPrefix(insertion, "\n") {
+		// Ensure separation from preceding content
+		if endByte > 0 && content[endByte-1] != '\n' && !strings.HasPrefix(insertion, "\n") {
 			insertion = "\n" + insertion
+		}
+		// Ensure separation from following content
+		if !strings.HasSuffix(insertion, "\n") && endByte < uint32(len(content)) && content[endByte] != '\n' {
+			insertion += "\n"
 		}
 		result = append(result, content[:endByte]...)
 		result = append(result, []byte(insertion)...)
@@ -833,6 +843,11 @@ func (e *Engine) applyTextEditOperation(op EditOperation, content []byte, start,
 	case EditReplace:
 		result = append(result, content[:start]...)
 		result = append(result, []byte(indentedContent)...)
+		// Preserve trailing newline: if selection ended with \n but replacement doesn't,
+		// re-add it to prevent line merging
+		if end > start && content[end-1] == '\n' && !strings.HasSuffix(indentedContent, "\n") {
+			result = append(result, '\n')
+		}
 		result = append(result, content[end:]...)
 
 	case EditInsertBefore:
@@ -846,8 +861,13 @@ func (e *Engine) applyTextEditOperation(op EditOperation, content []byte, start,
 
 	case EditInsertAfter:
 		insertion := indentedContent
-		if !strings.HasPrefix(insertion, "\n") {
+		// Ensure separation from preceding content
+		if end > 0 && content[end-1] != '\n' && !strings.HasPrefix(insertion, "\n") {
 			insertion = "\n" + insertion
+		}
+		// Ensure separation from following content
+		if !strings.HasSuffix(insertion, "\n") && end < len(content) && content[end] != '\n' {
+			insertion += "\n"
 		}
 		result = append(result, content[:end]...)
 		result = append(result, []byte(insertion)...)

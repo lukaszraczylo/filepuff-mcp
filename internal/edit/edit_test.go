@@ -1402,3 +1402,311 @@ func TestFindLineRange(t *testing.T) {
 		})
 	}
 }
+
+// ==================== Line merge regression tests ====================
+// These tests verify that edit operations don't merge adjacent lines.
+// Each test checks exact line-by-line output, not just substring presence.
+
+func TestRegressionLineMergeReplace(t *testing.T) {
+	registry := parser.NewRegistry()
+	defer registry.Close()
+	e := NewEngine(registry)
+
+	tests := []struct {
+		name      string
+		content   string
+		edit      *ASTEdit
+		wantLines []string
+	}{
+		{
+			name:    "replace mid-line by line range preserves line boundaries",
+			content: "line1\nline2\nline3\nline4\n",
+			edit: &ASTEdit{
+				Operation:  EditReplace,
+				Selector:   ASTSelector{AtLine: 2},
+				NewContent: "replaced",
+			},
+			wantLines: []string{"line1", "replaced", "line3", "line4", ""},
+		},
+		{
+			name:    "replace multi-line range preserves boundaries",
+			content: "line1\nline2\nline3\nline4\n",
+			edit: &ASTEdit{
+				Operation:  EditReplace,
+				Selector:   ASTSelector{AtLine: 2, LineEnd: 3},
+				NewContent: "newA\nnewB",
+			},
+			wantLines: []string{"line1", "newA", "newB", "line4", ""},
+		},
+		{
+			name:    "replace last line without trailing newline",
+			content: "line1\nline2\nline3",
+			edit: &ASTEdit{
+				Operation:  EditReplace,
+				Selector:   ASTSelector{AtLine: 3},
+				NewContent: "replaced",
+			},
+			wantLines: []string{"line1", "line2", "replaced"},
+		},
+		{
+			name:    "replace single line with multi-line content",
+			content: "before\ntarget\nafter\n",
+			edit: &ASTEdit{
+				Operation:  EditReplace,
+				Selector:   ASTSelector{AtLine: 2},
+				NewContent: "new1\nnew2\nnew3",
+			},
+			wantLines: []string{"before", "new1", "new2", "new3", "after", ""},
+		},
+		{
+			name:    "replace by exact text preserves surrounding lines",
+			content: "aaa\nbbb\nccc\n",
+			edit: &ASTEdit{
+				Operation:  EditReplace,
+				Selector:   ASTSelector{Text: "bbb"},
+				NewContent: "xxx",
+			},
+			wantLines: []string{"aaa", "xxx", "ccc", ""},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			tmpFile := filepath.Join(tmpDir, "test.txt")
+			if err := os.WriteFile(tmpFile, []byte(tt.content), 0600); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			tt.edit.File = tmpFile
+
+			result, err := e.Apply(context.Background(), tt.edit)
+			if err != nil {
+				t.Fatalf("apply: %v", err)
+			}
+			if !result.Success {
+				t.Fatalf("not successful: %s", result.Error)
+			}
+
+			got, _ := os.ReadFile(tmpFile)
+			gotLines := strings.Split(string(got), "\n")
+			if len(gotLines) != len(tt.wantLines) {
+				t.Fatalf("line count = %d, want %d\ngot:  %q\nwant: %q", len(gotLines), len(tt.wantLines), gotLines, tt.wantLines)
+			}
+			for i, want := range tt.wantLines {
+				if gotLines[i] != want {
+					t.Errorf("line %d = %q, want %q", i+1, gotLines[i], want)
+				}
+			}
+		})
+	}
+}
+
+func TestRegressionLineMergeInsertAfter(t *testing.T) {
+	registry := parser.NewRegistry()
+	defer registry.Close()
+	e := NewEngine(registry)
+
+	tests := []struct {
+		name      string
+		content   string
+		edit      *ASTEdit
+		wantLines []string
+	}{
+		{
+			name:    "insert after mid-line doesn't merge with next line",
+			content: "line1\nline2\nline3\n",
+			edit: &ASTEdit{
+				Operation:  EditInsertAfter,
+				Selector:   ASTSelector{Text: "line2"},
+				NewContent: "inserted",
+			},
+			wantLines: []string{"line1", "line2", "inserted", "line3", ""},
+		},
+		{
+			name:    "insert after last line without trailing newline",
+			content: "line1\nline2\nline3",
+			edit: &ASTEdit{
+				Operation:  EditInsertAfter,
+				Selector:   ASTSelector{Text: "line3"},
+				NewContent: "inserted",
+			},
+			wantLines: []string{"line1", "line2", "line3", "inserted"},
+		},
+		{
+			name:    "insert multi-line block after line",
+			content: "before\ntarget\nafter\n",
+			edit: &ASTEdit{
+				Operation:  EditInsertAfter,
+				Selector:   ASTSelector{Text: "target"},
+				NewContent: "new1\nnew2\nnew3",
+			},
+			wantLines: []string{"before", "target", "new1", "new2", "new3", "after", ""},
+		},
+		{
+			name:    "insert after by line number",
+			content: "aaa\nbbb\nccc\n",
+			edit: &ASTEdit{
+				Operation:  EditInsertAfter,
+				Selector:   ASTSelector{AtLine: 2},
+				NewContent: "inserted",
+			},
+			wantLines: []string{"aaa", "bbb", "inserted", "ccc", ""},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			tmpFile := filepath.Join(tmpDir, "test.txt")
+			if err := os.WriteFile(tmpFile, []byte(tt.content), 0600); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			tt.edit.File = tmpFile
+
+			result, err := e.Apply(context.Background(), tt.edit)
+			if err != nil {
+				t.Fatalf("apply: %v", err)
+			}
+			if !result.Success {
+				t.Fatalf("not successful: %s", result.Error)
+			}
+
+			got, _ := os.ReadFile(tmpFile)
+			gotLines := strings.Split(string(got), "\n")
+			if len(gotLines) != len(tt.wantLines) {
+				t.Fatalf("line count = %d, want %d\ngot:  %q\nwant: %q", len(gotLines), len(tt.wantLines), gotLines, tt.wantLines)
+			}
+			for i, want := range tt.wantLines {
+				if gotLines[i] != want {
+					t.Errorf("line %d = %q, want %q", i+1, gotLines[i], want)
+				}
+			}
+		})
+	}
+}
+
+func TestRegressionLineMergeInsertBefore(t *testing.T) {
+	registry := parser.NewRegistry()
+	defer registry.Close()
+	e := NewEngine(registry)
+
+	tests := []struct {
+		name      string
+		content   string
+		edit      *ASTEdit
+		wantLines []string
+	}{
+		{
+			name:    "insert before mid-line doesn't merge",
+			content: "line1\nline2\nline3\n",
+			edit: &ASTEdit{
+				Operation:  EditInsertBefore,
+				Selector:   ASTSelector{Text: "line2"},
+				NewContent: "inserted",
+			},
+			wantLines: []string{"line1", "inserted", "line2", "line3", ""},
+		},
+		{
+			name:    "insert multi-line block before line",
+			content: "before\ntarget\nafter\n",
+			edit: &ASTEdit{
+				Operation:  EditInsertBefore,
+				Selector:   ASTSelector{Text: "target"},
+				NewContent: "new1\nnew2",
+			},
+			wantLines: []string{"before", "new1", "new2", "target", "after", ""},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			tmpFile := filepath.Join(tmpDir, "test.txt")
+			if err := os.WriteFile(tmpFile, []byte(tt.content), 0600); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			tt.edit.File = tmpFile
+
+			result, err := e.Apply(context.Background(), tt.edit)
+			if err != nil {
+				t.Fatalf("apply: %v", err)
+			}
+			if !result.Success {
+				t.Fatalf("not successful: %s", result.Error)
+			}
+
+			got, _ := os.ReadFile(tmpFile)
+			gotLines := strings.Split(string(got), "\n")
+			if len(gotLines) != len(tt.wantLines) {
+				t.Fatalf("line count = %d, want %d\ngot:  %q\nwant: %q", len(gotLines), len(tt.wantLines), gotLines, tt.wantLines)
+			}
+			for i, want := range tt.wantLines {
+				if gotLines[i] != want {
+					t.Errorf("line %d = %q, want %q", i+1, gotLines[i], want)
+				}
+			}
+		})
+	}
+}
+
+func TestRegressionLineMergeDelete(t *testing.T) {
+	registry := parser.NewRegistry()
+	defer registry.Close()
+	e := NewEngine(registry)
+
+	tests := []struct {
+		name      string
+		content   string
+		edit      *ASTEdit
+		wantLines []string
+	}{
+		{
+			name:    "delete mid-line preserves surrounding lines",
+			content: "line1\nline2\nline3\n",
+			edit: &ASTEdit{
+				Operation: EditDelete,
+				Selector:  ASTSelector{AtLine: 2},
+			},
+			wantLines: []string{"line1", "line3", ""},
+		},
+		{
+			name:    "delete line range preserves surrounding lines",
+			content: "line1\nline2\nline3\nline4\n",
+			edit: &ASTEdit{
+				Operation: EditDelete,
+				Selector:  ASTSelector{AtLine: 2, LineEnd: 3},
+			},
+			wantLines: []string{"line1", "line4", ""},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			tmpFile := filepath.Join(tmpDir, "test.txt")
+			if err := os.WriteFile(tmpFile, []byte(tt.content), 0600); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			tt.edit.File = tmpFile
+
+			result, err := e.Apply(context.Background(), tt.edit)
+			if err != nil {
+				t.Fatalf("apply: %v", err)
+			}
+			if !result.Success {
+				t.Fatalf("not successful: %s", result.Error)
+			}
+
+			got, _ := os.ReadFile(tmpFile)
+			gotLines := strings.Split(string(got), "\n")
+			if len(gotLines) != len(tt.wantLines) {
+				t.Fatalf("line count = %d, want %d\ngot:  %q\nwant: %q", len(gotLines), len(tt.wantLines), gotLines, tt.wantLines)
+			}
+			for i, want := range tt.wantLines {
+				if gotLines[i] != want {
+					t.Errorf("line %d = %q, want %q", i+1, gotLines[i], want)
+				}
+			}
+		})
+	}
+}
