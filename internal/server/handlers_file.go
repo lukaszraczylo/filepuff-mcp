@@ -9,8 +9,11 @@ import (
 	"strings"
 	"time"
 
+	xxhash "github.com/cespare/xxhash/v2"
+	"github.com/lukaszraczylo/mcp-filepuff/internal/parser"
 	"github.com/lukaszraczylo/mcp-filepuff/internal/search"
 	"github.com/lukaszraczylo/mcp-filepuff/pkg/errors"
+	"github.com/lukaszraczylo/mcp-filepuff/pkg/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -27,7 +30,6 @@ func (s *Server) handleFileSearch(ctx context.Context, request mcp.CallToolReque
 		return mcp.NewToolResultError("ripgrep (rg) is not available. Please install it: https://github.com/BurntSushi/ripgrep#installation"), nil
 	}
 
-	// Parse request arguments using SDK helpers
 	pattern, err := request.RequireString("pattern")
 	if err != nil {
 		return mcp.NewToolResultError("pattern is required"), nil
@@ -43,7 +45,6 @@ func (s *Server) handleFileSearch(ctx context.Context, request mcp.CallToolReque
 		MaxResults:   request.GetInt("max_results", 0),
 	}
 
-	// Execute search
 	results, err := s.searcher.Search(ctx, req)
 	if err != nil {
 		s.logger.Warn("search error", "error", err)
@@ -56,14 +57,12 @@ func (s *Server) handleFileSearch(ctx context.Context, request mcp.CallToolReque
 		"truncated", results.Truncated,
 	)
 
-	// Format results
 	output := s.searcher.FormatResults(results)
 	return mcp.NewToolResultText(output), nil
 }
 
 // handleFileRead handles the file_read tool.
 func (s *Server) handleFileRead(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	// Acquire semaphore to limit concurrent reads (prevents memory exhaustion)
 	select {
 	case s.readSem <- struct{}{}:
 		defer func() { <-s.readSem }()
@@ -71,46 +70,103 @@ func (s *Server) handleFileRead(ctx context.Context, request mcp.CallToolRequest
 		return mcp.NewToolResultError("request cancelled"), nil
 	}
 
-	path, err := request.RequireString("path")
+	// Batch mode: paths[] takes precedence over path
+	if paths := request.GetStringSlice("paths", nil); len(paths) > 0 {
+		var output strings.Builder
+		for i, p := range paths {
+			if i > 0 {
+				output.WriteString("\n")
+			}
+			result, err := s.readOneFile(ctx, request, p)
+			if err != nil {
+				output.WriteString(fmt.Sprintf("--- %s ---\n[error: %s]\n", p, errors.SanitizeError(err)))
+				continue
+			}
+			output.WriteString(fmt.Sprintf("--- %s ---\n%s", p, result))
+		}
+		return mcp.NewToolResultText(output.String()), nil
+	}
+
+	path := request.GetString("path", "")
+	if path == "" {
+		return mcp.NewToolResultError("path or paths is required"), nil
+	}
+
+	result, err := s.readOneFile(ctx, request, path)
 	if err != nil {
-		return mcp.NewToolResultError("path is required"), nil
+		return mcp.NewToolResultError(errors.SanitizeError(err)), nil
 	}
+	return mcp.NewToolResultText(result), nil
+}
 
-	// Validate path is within workspace
+// readOneFile reads a single file applying all formatting options from the request.
+func (s *Server) readOneFile(ctx context.Context, request mcp.CallToolRequest, path string) (string, error) {
 	if !s.cfg.IsPathAllowed(path) {
-		return mcp.NewToolResultError("path is outside workspace root"), nil
+		return "", fmt.Errorf("path is outside workspace root")
 	}
 
-	// Check file size before reading to avoid loading huge files into memory
 	info, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return mcp.NewToolResultError(fmt.Sprintf("file not found: %s", path)), nil
+			return "", fmt.Errorf("file not found: %s", path)
 		}
 		if os.IsPermission(err) {
-			return mcp.NewToolResultError(fmt.Sprintf("permission denied: %s", path)), nil
+			return "", fmt.Errorf("permission denied: %s", path)
 		}
 		s.logger.Warn("file stat error", "path", path, "error", err)
-		return mcp.NewToolResultError("error accessing file"), nil
+		return "", fmt.Errorf("error accessing file")
 	}
 	if info.Size() > s.cfg.MaxFileSize {
-		return mcp.NewToolResultError(fmt.Sprintf("file too large (%d bytes, max %d)", info.Size(), s.cfg.MaxFileSize)), nil
+		return "", fmt.Errorf("file too large (%d bytes, max %d)", info.Size(), s.cfg.MaxFileSize)
 	}
 
-	// Read file
 	content, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsPermission(err) {
-			return mcp.NewToolResultError(fmt.Sprintf("permission denied: %s", path)), nil
+			return "", fmt.Errorf("permission denied: %s", path)
 		}
 		s.logger.Warn("file read error", "path", path, "error", err)
-		return mcp.NewToolResultError("error reading file"), nil
+		return "", fmt.Errorf("error reading file")
 	}
 
-	// Handle line range
+	// Compute etag from content hash
+	etag := fmt.Sprintf("%016x", xxhash.Sum64(content))
+
+	// Short-circuit if caller has the current version
+	if prev := request.GetString("previous_etag", ""); prev != "" && prev == etag {
+		return fmt.Sprintf("[unchanged, etag: %s]\n", etag), nil
+	}
+
+	// Parse request options
+	includeAST := request.GetBool("include_ast", false)
+	symbolsOnly := request.GetBool("symbols_only", false)
+	symbolName := request.GetString("symbol_name", "")
+	noLineNumbers := request.GetBool("no_line_numbers", false)
+	lineInterval := request.GetInt("line_number_interval", 1)
+	collapseBlank := request.GetBool("collapse_blank_lines", false)
+	maxLines := request.GetInt("max_lines", 0)
+
+	if lineInterval == 0 {
+		noLineNumbers = true
+	}
+	if symbolsOnly && !includeAST {
+		return "", fmt.Errorf("symbols_only requires include_ast=true")
+	}
+
 	lines := splitLines(string(content))
 	lineStart := request.GetInt("line_start", 1)
 	lineEnd := request.GetInt("line_end", len(lines))
+
+	// Symbol-based line range: find the symbol and use its exact bounds
+	if symbolName != "" {
+		symbolKind := protocol.SymbolKind(request.GetString("symbol_kind", ""))
+		start, end, found := s.resolveSymbolLines(ctx, path, content, symbolName, symbolKind)
+		if !found {
+			return "", fmt.Errorf("symbol %q not found in %s", symbolName, path)
+		}
+		lineStart = start
+		lineEnd = end
+	}
 
 	// Clamp to valid range
 	if lineStart < 1 {
@@ -125,47 +181,68 @@ func (s *Server) handleFileRead(ctx context.Context, request mcp.CallToolRequest
 
 	var output strings.Builder
 
-	// Include AST summary if requested
-	includeAST := request.GetBool("include_ast", false)
-	symbolsOnly := request.GetBool("symbols_only", false)
-	maxLines := request.GetInt("max_lines", 0)
-
-	// Validate symbols_only requires include_ast
-	if symbolsOnly && !includeAST {
-		return mcp.NewToolResultError("symbols_only requires include_ast=true"), nil
-	}
-
 	if includeAST {
-		astSummary := s.generateASTSummary(ctx, path, content)
-		if astSummary != "" {
-			output.WriteString(astSummary)
+		if summary := s.generateASTSummary(ctx, path, content); summary != "" {
+			output.WriteString(summary)
 			if !symbolsOnly {
 				output.WriteString("\n---\n\n")
 			}
 		}
 	}
 
-	// Skip file content if symbols_only mode
-	if !symbolsOnly {
-		// Apply max_lines limit if specified
-		effectiveEnd := lineEnd
-		if maxLines > 0 && (lineEnd-lineStart+1) > maxLines {
-			effectiveEnd = lineStart + maxLines - 1
-			if effectiveEnd < lineEnd {
-				// Add note that output was truncated
-				defer func() {
-					output.WriteString(fmt.Sprintf("\n[... %d more lines omitted for token efficiency. Use line_start/line_end or increase max_lines to see more]\n", lineEnd-effectiveEnd))
-				}()
-			}
-		}
+	if symbolsOnly {
+		output.WriteString(fmt.Sprintf("[etag: %s]\n", etag))
+		return output.String(), nil
+	}
 
-		// Extract requested lines
-		for i := lineStart - 1; i < effectiveEnd && i < len(lines); i++ {
-			output.WriteString(fmt.Sprintf("%4d│ %s\n", i+1, lines[i]))
+	writeLines(&output, lines, lineStart, lineEnd, maxLines, noLineNumbers, lineInterval, collapseBlank)
+
+	output.WriteString(fmt.Sprintf("[etag: %s]\n", etag))
+	return output.String(), nil
+}
+
+// resolveSymbolLines parses the AST and returns the line range of the named symbol.
+// symbolKind optionally filters by kind (empty = any).
+func (s *Server) resolveSymbolLines(ctx context.Context, path string, content []byte, symbolName string, symbolKind protocol.SymbolKind) (startLine, endLine int, found bool) {
+	result, err := s.parser.Parse(ctx, path, content)
+	if err != nil {
+		return
+	}
+	return parser.FindSymbolRange(result.Tree, content, path, symbolName, symbolKind)
+}
+
+// writeLines writes the selected line range into output, applying all formatting options.
+func writeLines(output *strings.Builder, lines []string, lineStart, lineEnd, maxLines int, noLineNumbers bool, lineInterval int, collapseBlank bool) {
+	effectiveEnd := lineEnd
+	truncatedCount := 0
+	if maxLines > 0 && (lineEnd-lineStart+1) > maxLines {
+		effectiveEnd = lineStart + maxLines - 1
+		truncatedCount = lineEnd - effectiveEnd
+	}
+
+	prevBlank := false
+	for i := lineStart - 1; i < effectiveEnd && i < len(lines); i++ {
+		line := lines[i]
+		isBlank := strings.TrimSpace(line) == ""
+		if collapseBlank && isBlank && prevBlank {
+			continue
+		}
+		prevBlank = isBlank
+
+		lineNum := i + 1
+		switch {
+		case noLineNumbers:
+			output.WriteString(line + "\n")
+		case lineInterval <= 1 || lineNum%lineInterval == 0 || i == lineStart-1 || i == effectiveEnd-1:
+			fmt.Fprintf(output, "%4d│ %s\n", lineNum, line)
+		default:
+			fmt.Fprintf(output, "    │ %s\n", line)
 		}
 	}
 
-	return mcp.NewToolResultText(output.String()), nil
+	if truncatedCount > 0 {
+		fmt.Fprintf(output, "\n[... %d more lines omitted. Use line_start/line_end or increase max_lines to see more]\n", truncatedCount)
+	}
 }
 
 // splitLines splits a string into lines.
@@ -175,24 +252,20 @@ func splitLines(s string) []string {
 	const largeSizeThreshold = 1024 * 1024 // 1MB
 
 	if len(s) > largeSizeThreshold {
-		// Use scanner for large files with increased buffer for long lines
 		scanner := bufio.NewScanner(strings.NewReader(s))
-		scanner.Buffer(make([]byte, 0, bufio.MaxScanTokenSize), 1024*1024) // up to 1MB per line
+		scanner.Buffer(make([]byte, 0, bufio.MaxScanTokenSize), 1024*1024)
 		var lines []string
 		for scanner.Scan() {
 			lines = append(lines, scanner.Text())
 		}
 		if err := scanner.Err(); err != nil {
-			// If scanning fails (e.g. line exceeds buffer), fall back to strings.Split
 			return strings.Split(s, "\n")
 		}
-		// Add empty line if string ended with newline
 		if len(s) > 0 && s[len(s)-1] == '\n' {
 			lines = append(lines, "")
 		}
 		return lines
 	}
 
-	// Use optimized stdlib implementation for smaller files (2-3x faster than manual loop)
 	return strings.Split(s, "\n")
 }

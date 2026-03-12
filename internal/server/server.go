@@ -138,19 +138,38 @@ func (s *Server) registerTools() {
 	s.mcp.AddTool(
 		mcp.NewTool("file_read",
 			mcp.WithDescription("Read a file's contents with optional line range and AST symbol summary.\n\n"+
-				"Returns: File content with numbered lines (format: \"  12│ line text\"). "+
-				"When include_ast=true: prepends symbol summary (\"**file.go** (N lines, go)\\nSymbols:\\n  func Name  L12\\n  struct Config  L45\"). "+
-				"When symbols_only=true: returns only the symbol summary (~95% fewer tokens). "+
-				"When max_lines is set: truncates output with \"[... N more lines omitted]\" notice.\n\n"+
+				"Token-saving features:\n"+
+				"  previous_etag: skip re-reading unchanged files (returns '[unchanged, etag: ...]' if unchanged)\n"+
+				"  symbol_name: read only a named function/struct/class (eliminates ast_query round-trip)\n"+
+				"  symbols_only=true: return only symbol list, ~95% fewer tokens (requires include_ast=true)\n"+
+				"  no_line_numbers=true: strip the line-number prefix (~10%% savings)\n"+
+				"  line_number_interval=N: print line numbers only every N lines\n"+
+				"  collapse_blank_lines=true: collapse consecutive blank lines to one\n"+
+				"  max_lines=N: truncate output with omitted count notice\n"+
+				"  paths=[...]: read multiple files in one call\n\n"+
+				"All responses include '[etag: hex]' footer for use as previous_etag in subsequent reads.\n\n"+
 				"Examples:\n"+
-				"  Full file: {\"path\": \"main.go\"}\n"+
-				"  With AST: {\"path\": \"main.go\", \"include_ast\": true}\n"+
-				"  Symbols only: {\"path\": \"main.go\", \"include_ast\": true, \"symbols_only\": true}\n"+
+				"  Full file:   {\"path\": \"main.go\"}\n"+
+				"  Etag check: {\"path\": \"main.go\", \"previous_etag\": \"a3f9c2b1\"}\n"+
+				"  By symbol:  {\"path\": \"server.go\", \"symbol_name\": \"handleFileRead\"}\n"+
+				"  Batch:      {\"paths\": [\"a.go\", \"b.go\"]}\n"+
 				"  Line range: {\"path\": \"main.go\", \"line_start\": 10, \"line_end\": 50}"),
 			mcp.WithReadOnlyHintAnnotation(true),
 			mcp.WithString("path",
-				mcp.Required(),
-				mcp.Description("Path to the file to read"),
+				mcp.Description("Path to the file to read (required unless paths is provided)"),
+			),
+			mcp.WithArray("paths",
+				mcp.Description("Read multiple files in one call. Each file gets a '--- path ---' header. Overrides path if both provided."),
+				mcp.WithStringItems(),
+			),
+			mcp.WithString("previous_etag",
+				mcp.Description("Etag from a previous read of this file. If the file is unchanged, returns '[unchanged, etag: ...]' with no content — saving all content tokens."),
+			),
+			mcp.WithString("symbol_name",
+				mcp.Description("Read only the named symbol (function, struct, class, etc.) instead of the whole file. Resolves line range via AST — eliminates an ast_query round-trip."),
+			),
+			mcp.WithString("symbol_kind",
+				mcp.Description("Disambiguate symbol_name by kind when multiple symbols share the same name. Accepted values: function, method, struct, class, interface, type, enum, trait, constant, module."),
 			),
 			mcp.WithNumber("line_start",
 				mcp.Description("Starting line number (1-indexed)"),
@@ -166,6 +185,15 @@ func (s *Server) registerTools() {
 			),
 			mcp.WithNumber("max_lines",
 				mcp.Description("Maximum number of lines to return (for token efficiency). Applied after line_start/line_end."),
+			),
+			mcp.WithBoolean("no_line_numbers",
+				mcp.Description("Omit the '  12│ ' line number prefix entirely. Saves ~10% tokens. line_number_interval=0 has the same effect."),
+			),
+			mcp.WithNumber("line_number_interval",
+				mcp.Description("Print line numbers only every N lines (default: 1 = every line). E.g. 10 = anchor every 10th line plus first/last. 0 = no line numbers."),
+			),
+			mcp.WithBoolean("collapse_blank_lines",
+				mcp.Description("Collapse runs of consecutive blank lines to a single blank line. Useful for token savings on heavily-spaced code."),
 			),
 		),
 		s.handleFileRead,
@@ -333,6 +361,9 @@ func (s *Server) registerTools() {
 			),
 			mcp.WithString("selector_pattern",
 				mcp.Description("Regex pattern to match (text mode). Must be unique or use selector_index."),
+			),
+			mcp.WithBoolean("compact_response",
+				mcp.Description("Return only the modified symbol's content instead of a full diff. Requires selector_name. Saves tokens on large-file edits."),
 			),
 		),
 		s.handleEditApply,

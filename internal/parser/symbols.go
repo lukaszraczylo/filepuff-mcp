@@ -878,3 +878,72 @@ func extractElixirImpl(n *sitter.Node, content []byte, filename string) *protoco
 		Location: NodeLocation(n, filename),
 	}
 }
+
+// kindMatchesNode returns true if the given SymbolKind matches the node type.
+// An empty kind matches all symbol-bearing nodes.
+func kindMatchesNode(kind protocol.SymbolKind, nodeType string) bool {
+	if kind == "" {
+		return true
+	}
+	switch kind {
+	case protocol.SymbolFunction:
+		return nodeType == "function_declaration" || nodeType == "function_definition" || nodeType == "function_item"
+	case protocol.SymbolMethod:
+		return nodeType == "method_declaration" || nodeType == "method_definition"
+	case protocol.SymbolClass:
+		return nodeType == "class_declaration" || nodeType == "class_definition"
+	case protocol.SymbolStruct:
+		return nodeType == "struct_item" || nodeType == "type_declaration"
+	case protocol.SymbolInterface:
+		return nodeType == "interface_declaration"
+	case protocol.SymbolType:
+		return nodeType == "type_declaration" || nodeType == "type_alias_declaration" || nodeType == "type_item"
+	case protocol.SymbolEnum:
+		return nodeType == "enum_item"
+	case protocol.SymbolTrait:
+		return nodeType == "trait_item"
+	case protocol.SymbolConstant:
+		return nodeType == "const_item"
+	case protocol.SymbolModule:
+		return nodeType == "mod_item"
+	}
+	return true
+}
+
+// FindSymbolRange finds a named symbol in the AST and returns its line range (1-indexed, inclusive).
+// symbolKind filters by symbol kind (e.g. "function", "struct"); empty string matches any kind.
+// Returns (0, 0, false) if the symbol is not found.
+func FindSymbolRange(tree *sitter.Tree, content []byte, filename, symbolName string, symbolKind protocol.SymbolKind) (startLine, endLine int, found bool) {
+	if tree == nil || symbolName == "" {
+		return
+	}
+	WalkTree(tree.RootNode(), func(n *sitter.Node) bool {
+		if found {
+			return false
+		}
+		nameNode := n.ChildByFieldName("name")
+		if nameNode == nil {
+			return true
+		}
+		if GetNodeText(nameNode, content) != symbolName {
+			return true
+		}
+		switch n.Type() {
+		case "function_declaration", "method_declaration", "type_declaration",
+			"function_definition", "class_definition", "class_declaration",
+			"interface_declaration", "type_alias_declaration",
+			"function_item", "struct_item", "enum_item", "trait_item",
+			"type_item", "const_item", "mod_item":
+			if !kindMatchesNode(symbolKind, n.Type()) {
+				return true // kind mismatch, keep searching
+			}
+			r := NodeRange(n, filename)
+			startLine = r.Start.Line
+			endLine = r.End.Line
+			found = true
+			return false
+		}
+		return true
+	})
+	return
+}

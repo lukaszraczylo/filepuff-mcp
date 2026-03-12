@@ -4,17 +4,18 @@ package server
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/lukaszraczylo/mcp-filepuff/internal/edit"
 	"github.com/lukaszraczylo/mcp-filepuff/pkg/errors"
+	"github.com/lukaszraczylo/mcp-filepuff/pkg/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
 // unescapeNewlines converts literal \n, \t, \" sequences to actual characters.
 // This handles cases where MCP clients send double-escaped JSON strings.
 func unescapeNewlines(s string) string {
-	// Replace common escape sequences
 	s = strings.ReplaceAll(s, "\\n", "\n")
 	s = strings.ReplaceAll(s, "\\t", "\t")
 	s = strings.ReplaceAll(s, "\\\"", "\"")
@@ -39,7 +40,6 @@ func (s *Server) handleEdit(ctx context.Context, request mcp.CallToolRequest) (*
 		return mcp.NewToolResultError("operation is required"), nil
 	}
 
-	// Validate operation against known values
 	switch edit.EditOperation(operation) {
 	case edit.EditReplace, edit.EditInsertBefore, edit.EditInsertAfter, edit.EditDelete:
 		// valid
@@ -49,40 +49,31 @@ func (s *Server) handleEdit(ctx context.Context, request mcp.CallToolRequest) (*
 		)), nil
 	}
 
-	// Validate path
 	if !s.cfg.IsPathAllowed(file) {
 		return mcp.NewToolResultError("file is outside workspace root"), nil
 	}
 
-	// Note: We no longer validate language support here.
-	// The edit engine automatically detects whether to use AST or text mode.
-
-	// Build edit request with both AST and text-mode selectors
 	newContent := request.GetString("new_content", "")
-
-	// Unescape common escape sequences that may be double-encoded by MCP clients
 	newContent = unescapeNewlines(newContent)
+
+	selectorName := request.GetString("selector_name", "")
 
 	astEdit := &edit.ASTEdit{
 		File:       file,
 		Operation:  edit.EditOperation(operation),
 		NewContent: newContent,
 		Selector: edit.ASTSelector{
-			// AST-mode selectors
-			Kind:   request.GetString("selector_kind", ""),
-			Name:   request.GetString("selector_name", ""),
-			AtLine: request.GetInt("selector_line", 0),
-			Index:  request.GetInt("selector_index", 0),
-			// Text-mode selectors
+			Kind:        request.GetString("selector_kind", ""),
+			Name:        selectorName,
+			AtLine:      request.GetInt("selector_line", 0),
+			Index:       request.GetInt("selector_index", 0),
 			LineEnd:     request.GetInt("selector_line_end", 0),
 			Text:        request.GetString("selector_text", ""),
 			TextPattern: request.GetString("selector_pattern", ""),
 		},
 	}
 
-	// Perform edit (always apply)
 	result, err := s.editor.Apply(ctx, astEdit)
-
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("edit failed: %s", errors.SanitizeError(err))), nil
 	}
@@ -91,10 +82,24 @@ func (s *Server) handleEdit(ctx context.Context, request mcp.CallToolRequest) (*
 		return mcp.NewToolResultError(result.Error), nil
 	}
 
-	// Format output
+	// compact_response: return just the modified symbol instead of the full diff
+	if request.GetBool("compact_response", false) && selectorName != "" {
+		if content, readErr := os.ReadFile(file); readErr == nil {
+			if start, end, found := s.resolveSymbolLines(ctx, file, content, selectorName, protocol.SymbolKind("")); found {
+				lines := splitLines(string(content))
+				var sb strings.Builder
+				sb.WriteString(fmt.Sprintf("**Edit Applied** — %s (L%d-L%d):\n\n", selectorName, start, end))
+				for i := start - 1; i < end && i < len(lines); i++ {
+					sb.WriteString(fmt.Sprintf("%4d| %s\n", i+1, lines[i]))
+				}
+				return mcp.NewToolResultText(sb.String()), nil
+			}
+		}
+		// fall through to diff if symbol lookup fails
+	}
+
 	var output strings.Builder
 	output.WriteString("**Edit Applied Successfully**\n\n")
-
 	output.WriteString("Diff:\n```diff\n")
 	output.WriteString(result.Diff)
 	output.WriteString("```\n")
