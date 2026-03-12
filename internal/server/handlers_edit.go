@@ -22,18 +22,13 @@ func unescapeNewlines(s string) string {
 	return s
 }
 
-// handleEditPreview handles the edit_preview tool.
-func (s *Server) handleEditPreview(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	return s.handleEdit(ctx, request, false)
-}
-
 // handleEditApply handles the edit_apply tool.
 func (s *Server) handleEditApply(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	return s.handleEdit(ctx, request, true)
+	return s.handleEdit(ctx, request)
 }
 
-// handleEdit is the shared implementation for edit_preview and edit_apply.
-func (s *Server) handleEdit(ctx context.Context, request mcp.CallToolRequest, apply bool) (*mcp.CallToolResult, error) {
+// handleEdit performs an edit operation (always applies changes).
+func (s *Server) handleEdit(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	file, err := request.RequireString("file")
 	if err != nil {
 		return mcp.NewToolResultError("file is required"), nil
@@ -85,13 +80,8 @@ func (s *Server) handleEdit(ctx context.Context, request mcp.CallToolRequest, ap
 		},
 	}
 
-	// Perform edit
-	var result *edit.EditResult
-	if apply {
-		result, err = s.editor.Apply(ctx, astEdit)
-	} else {
-		result, err = s.editor.Preview(ctx, astEdit)
-	}
+	// Perform edit (always apply)
+	result, err := s.editor.Apply(ctx, astEdit)
 
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("edit failed: %s", errors.SanitizeError(err))), nil
@@ -103,11 +93,7 @@ func (s *Server) handleEdit(ctx context.Context, request mcp.CallToolRequest, ap
 
 	// Format output
 	var output strings.Builder
-	if apply {
-		output.WriteString("**Edit Applied Successfully**\n\n")
-	} else {
-		output.WriteString("**Edit Preview**\n\n")
-	}
+	output.WriteString("**Edit Applied Successfully**\n\n")
 
 	output.WriteString("Diff:\n```diff\n")
 	output.WriteString(result.Diff)

@@ -283,56 +283,6 @@ func Goodbye() error {
 	}
 }
 
-func TestHandleEditPreview(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	// Create a test file
-	testFile := filepath.Join(tmpDir, "test.go")
-	content := `package main
-
-func Hello() {
-	println("Hello")
-}
-`
-	if err := os.WriteFile(testFile, []byte(content), 0600); err != nil {
-		t.Fatalf("failed to write test file: %v", err)
-	}
-
-	cfg := &config.Config{WorkspaceRoot: tmpDir, EnableLSP: false}
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-
-	srv, err := New(cfg, logger)
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-
-	ctx := context.Background()
-	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]interface{}{
-		"file":          testFile,
-		"operation":     "replace",
-		"selector_kind": "function_declaration",
-		"selector_name": "Hello",
-		"new_content":   "func Hello() {\n\tprintln(\"Goodbye\")\n}",
-	}
-
-	result, err := srv.handleEdit(ctx, req, false)
-	if err != nil {
-		t.Errorf("handleEdit(preview) error = %v", err)
-	}
-
-	if result == nil {
-		t.Fatal("handleEdit(preview) returned nil result")
-		return
-	}
-
-	// Verify file was NOT modified (it's just a preview)
-	fileContent, _ := os.ReadFile(testFile)
-	if string(fileContent) != content {
-		t.Error("handleEdit(preview) should not modify the file")
-	}
-}
-
 func TestHandleEditApply(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -366,20 +316,20 @@ func Hello() {
 		"new_content":   "func Hello() {\n\tprintln(\"Goodbye\")\n}",
 	}
 
-	result, err := srv.handleEdit(ctx, req, true)
+	result, err := srv.handleEditApply(ctx, req)
 	if err != nil {
-		t.Errorf("handleEdit(apply) error = %v", err)
+		t.Errorf("handleEditApply error = %v", err)
 	}
 
 	if result == nil {
-		t.Fatal("handleEdit(apply) returned nil result")
+		t.Fatal("handleEditApply returned nil result")
 		return
 	}
 
 	// Verify file WAS modified
 	fileContent, _ := os.ReadFile(testFile)
 	if string(fileContent) == content {
-		t.Error("handleEdit(apply) should modify the file")
+		t.Error("handleEditApply should modify the file")
 	}
 }
 

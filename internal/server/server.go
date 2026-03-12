@@ -291,54 +291,6 @@ func (s *Server) registerTools() {
 
 	// Register edit tools
 	s.mcp.AddTool(
-		mcp.NewTool("edit_preview",
-			mcp.WithDescription("Preview an edit without applying it. Uses AST-aware editing for code files (Go, TypeScript, JavaScript, Python, C, C++, Rust), and text-based editing for other files (Markdown, JSON, YAML, config files, etc.).\n\n"+
-				"Returns: \"**Edit Preview**\" followed by a unified diff showing proposed changes. Does not modify the file. "+
-				"For code files: uses AST-aware mode with syntax validation. For other files: uses text-based mode.\n\n"+
-				"Examples:\n"+
-				"  AST mode: {\"file\": \"main.go\", \"operation\": \"replace\", \"selector_kind\": \"function_declaration\", \"selector_name\": \"Hello\", \"new_content\": \"func Hello() {\\n\\treturn\\n}\"}\n"+
-				"  Text mode: {\"file\": \"README.md\", \"operation\": \"replace\", \"selector_text\": \"## Old Header\", \"new_content\": \"## New Header\"}\n"+
-				"  Line range: {\"file\": \"config.yaml\", \"operation\": \"replace\", \"selector_line\": 5, \"selector_line_end\": 10, \"new_content\": \"key: value\"}"),
-			mcp.WithString("file",
-				mcp.Required(),
-				mcp.Description("Path to the file to edit"),
-			),
-			mcp.WithString("operation",
-				mcp.Required(),
-				mcp.Description("Edit operation: replace, insert_before, insert_after, delete"),
-			),
-			mcp.WithString("new_content",
-				mcp.Description("New content (required for replace/insert operations)"),
-			),
-			// AST-mode selectors (for code files)
-			mcp.WithString("selector_kind",
-				mcp.Description("AST node type to match (e.g., function_declaration, class_declaration). For code files only."),
-			),
-			mcp.WithString("selector_name",
-				mcp.Description("Name of the symbol to match. For code files only."),
-			),
-			// Shared selectors
-			mcp.WithNumber("selector_line",
-				mcp.Description("Line number (1-indexed). For AST mode: narrows search. For text mode: start of line range."),
-			),
-			mcp.WithNumber("selector_index",
-				mcp.Description("Index of the match to use if multiple matches found (default: 0)"),
-			),
-			// Text-mode selectors (for non-code files or explicit text matching)
-			mcp.WithNumber("selector_line_end",
-				mcp.Description("End line number for range selection (text mode). Used with selector_line."),
-			),
-			mcp.WithString("selector_text",
-				mcp.Description("Exact text to match (text mode). Must be unique or use selector_index."),
-			),
-			mcp.WithString("selector_pattern",
-				mcp.Description("Regex pattern to match (text mode). Must be unique or use selector_index."),
-			),
-		),
-		s.handleEditPreview,
-	)
-
-	s.mcp.AddTool(
 		mcp.NewTool("edit_apply",
 			mcp.WithDescription("Apply an edit to a file. Uses AST-aware editing for code files (Go, TypeScript, JavaScript, Python, C, C++, Rust) with syntax validation, and text-based editing for other files (Markdown, JSON, YAML, config files, etc.).\n\n"+
 				"Returns: \"**Edit Applied Successfully**\" followed by a unified diff of the changes made. "+

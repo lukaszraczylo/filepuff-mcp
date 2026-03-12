@@ -8,7 +8,7 @@ A Go-based MCP (Model Context Protocol) server for Claude Code providing intelli
 - **AST-Aware File Reading**: Read files with symbol extraction using Tree-sitter
 - **Code Pattern Matching**: Query code using patterns with capture placeholders
 - **LSP Integration**: Go-to-definition, find references, and symbol info via language servers
-- **Safe Editing**: AST-aware file editing with syntax validation and preview
+- **Safe Editing**: AST-aware file editing with syntax validation (edit_apply)
 - **Multi-Language Support**: Go, TypeScript, JavaScript, Python, C, C++, HTML, Vue, React
 - **Token Efficient**: Optimized for minimal token usage with symbols-only mode and output limiting
 
@@ -140,13 +140,13 @@ For optimal performance, keep the most frequently used tools loaded at startup a
     "filepuff": {
       "command": "mcp-filepuff",
       "args": ["-workspace", "."],
-      "alwaysAllow": ["file_read", "file_search", "edit_apply", "edit_preview"]
+      "alwaysAllow": ["file_read", "file_search", "edit_apply"]
     }
   }
 }
 ```
 
-This keeps `file_read`, `file_search`, `edit_apply`, and `edit_preview` immediately available while deferring less frequently used tools (`ping`, `ast_query`, `symbol_at`, `find_definition`, `find_references`).
+This keeps `file_read`, `file_search`, and `edit_apply` immediately available while deferring less frequently used tools (`ping`, `ast_query`, `symbol_at`, `find_definition`, `find_references`).
 
 #### System Prompt Guidance
 
@@ -158,7 +158,7 @@ You have access to filepuff MCP tools providing:
 - Fast regex search powered by ripgrep (file_search)
 - Structural code pattern matching across 9+ languages (ast_query)
 - LSP-powered go-to-definition, find-references, and symbol info (find_definition, find_references, symbol_at)
-- AST-aware file editing with syntax validation and preview (edit_preview, edit_apply)
+- AST-aware file editing with syntax validation (edit_apply)
 ```
 
 ## Usage
@@ -241,7 +241,7 @@ When performing file operations, prefer filepuff MCP tools over built-in equival
 | Read files | `mcp__filepuff__file_read` | Read |
 | Search content | `mcp__filepuff__file_search` | Grep |
 | AST pattern search | `mcp__filepuff__ast_query` | Grep/Glob |
-| Edit files | `mcp__filepuff__edit_preview` + `mcp__filepuff__edit_apply` | Edit |
+| Edit files | `mcp__filepuff__edit_apply` | Edit |
 | Find definitions | `mcp__filepuff__find_definition` | Grep |
 | Find references | `mcp__filepuff__find_references` | Grep |
 | Symbol info | `mcp__filepuff__symbol_at` | - |
@@ -399,8 +399,8 @@ Find all references to the symbol at a specific position.
 
 ---
 
-### `edit_preview`
-Preview an edit without applying it. Uses AST-aware editing for code files (Go, TypeScript, JavaScript, Python, C, C++), and text-based editing for other files (Markdown, JSON, YAML, config files, etc.).
+### `edit_apply`
+Apply an edit to a file. Uses AST-aware editing for code files with syntax validation, and text-based editing for other files.
 
 **Parameters**:
 - `file` (required): Path to the file to edit
@@ -419,13 +419,6 @@ Preview an edit without applying it. Uses AST-aware editing for code files (Go, 
 - `selector_line_end`: End line number for range selection
 - `selector_text`: Exact text to match (must be unique or use selector_index)
 - `selector_pattern`: Regex pattern to match
-
----
-
-### `edit_apply`
-Apply an edit to a file. Uses AST-aware editing for code files with syntax validation, and text-based editing for other files.
-
-**Parameters**: Same as `edit_preview`
 
 **Example (AST mode - Go file)**:
 ```json
@@ -544,8 +537,7 @@ make clean
 │                    MCP Server                           │
 ├─────────────────────────────────────────────────────────┤
 │  Tools: file_search, file_read, ast_query, symbol_at,  │
-│         find_definition, find_references,              │
-│         edit_preview, edit_apply, ping                 │
+│         find_definition, find_references, edit_apply, ping                 │
 ├─────────────────────────────────────────────────────────┤
 │                    Core Engines                         │
 ├───────────┬─────────────┬────────────┬─────────────────┤
@@ -746,7 +738,7 @@ flowchart TB
         C -->|Read| E[file_read]
         C -->|Query| F[ast_query]
         C -->|LSP| G[symbol_at<br/>find_definition<br/>find_references]
-        C -->|Edit| H[edit_preview<br/>edit_apply]
+        C -->|Edit| H[edit_apply]
     end
     
     subgraph "Core Engines"
@@ -819,7 +811,6 @@ The edit engine validates syntax before and after edits.
 
 **Solution**:
 - Ensure `new_content` is syntactically valid for the target language
-- Use `edit_preview` first to see the proposed changes
 - Check that the selector matches exactly one node
 
 #### Timeout Errors

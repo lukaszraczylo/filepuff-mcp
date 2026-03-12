@@ -451,8 +451,7 @@ Review the edit request and ensure all required fields are provided.
 
 **Remediation**:
 1. Validate `new_content` syntax independently
-2. Use `edit_preview` to see the proposed changes
-3. Ensure the edit maintains valid syntax
+2. Ensure the edit maintains valid syntax
 
 ---
 
@@ -622,9 +621,8 @@ mcp-filepuff -workspace /path/to/workspace
 **Symptoms**: Edit operation rejected with syntax error
 
 **Solution**:
-1. Use `edit_preview` first to see proposed changes
-2. Validate `new_content` is syntactically correct
-3. Check that surrounding code structure is maintained
+1. Validate `new_content` is syntactically correct
+2. Check that surrounding code structure is maintained
 
 ### Scenario 3: Search Returns Too Many Results
 

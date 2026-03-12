@@ -96,35 +96,17 @@ func Hello() string {
 		}
 	})
 
-	// Test 4: Edit preview and apply
+	// Test 4: Edit workflow
 	t.Run("edit_workflow", func(t *testing.T) {
-		// Preview edit
-		previewReq := mcp.CallToolRequest{}
-		previewReq.Params.Arguments = map[string]interface{}{
+		// Apply edit directly (preview removed to avoid confusing LLMs)
+		applyReq := mcp.CallToolRequest{}
+		applyReq.Params.Arguments = map[string]interface{}{
 			"file":          testFile,
 			"operation":     "replace",
 			"selector_kind": "function_declaration",
 			"selector_name": "Hello",
 			"new_content":   "func Hello() string {\n\treturn \"goodbye\"\n}",
 		}
-		previewResult, err := srv.handleEditPreview(ctx, previewReq)
-		if err != nil {
-			t.Errorf("handleEditPreview() error = %v", err)
-		}
-		if previewResult == nil {
-			t.Fatal("handleEditPreview() returned nil")
-			return
-		}
-
-		// Verify file unchanged after preview
-		originalContent, _ := os.ReadFile(testFile)
-		if string(originalContent) != content {
-			t.Error("preview should not modify file")
-		}
-
-		// Apply edit
-		applyReq := mcp.CallToolRequest{}
-		applyReq.Params.Arguments = previewReq.Params.Arguments
 		applyResult, err := srv.handleEditApply(ctx, applyReq)
 		if err != nil {
 			t.Errorf("handleEditApply() error = %v", err)
@@ -267,10 +249,8 @@ func TestMCPErrorResponses(t *testing.T) {
 			expectError: true,
 		},
 		{
-			name: "edit_missing_file",
-			handler: func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-				return srv.handleEdit(ctx, req, false)
-			},
+			name:    "edit_missing_file",
+			handler: srv.handleEditApply,
 			setupReq: func() mcp.CallToolRequest {
 				req := mcp.CallToolRequest{}
 				req.Params.Arguments = map[string]interface{}{
@@ -281,10 +261,8 @@ func TestMCPErrorResponses(t *testing.T) {
 			expectError: true,
 		},
 		{
-			name: "edit_missing_operation",
-			handler: func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-				return srv.handleEdit(ctx, req, false)
-			},
+			name:    "edit_missing_operation",
+			handler: srv.handleEditApply,
 			setupReq: func() mcp.CallToolRequest {
 				req := mcp.CallToolRequest{}
 				req.Params.Arguments = map[string]interface{}{
@@ -376,7 +354,7 @@ func Add(a, b int) int {
 			return
 		}
 
-		// 3. Preview edit
+		// 3. Edit (no preview)
 		editReq := mcp.CallToolRequest{}
 		editReq.Params.Arguments = map[string]interface{}{
 			"file":          testFile,
@@ -385,12 +363,12 @@ func Add(a, b int) int {
 			"selector_name": "Add",
 			"new_content":   "func Add(a, b int) int {\n\treturn a + b + 1\n}",
 		}
-		editResult, err := srv.handleEditPreview(ctx, editReq)
+		editResult, err := srv.handleEditApply(ctx, editReq)
 		if err != nil {
-			t.Fatalf("handleEditPreview() error = %v", err)
+			t.Fatalf("handleEditApply() error = %v", err)
 		}
 		if editResult == nil {
-			t.Fatal("handleEditPreview() returned nil")
+			t.Fatal("handleEditApply() returned nil")
 			return
 		}
 	})
