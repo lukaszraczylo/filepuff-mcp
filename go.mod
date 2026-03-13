@@ -4,7 +4,7 @@ go 1.25.5
 
 require (
 	github.com/cespare/xxhash/v2 v2.3.0
-	github.com/goccy/go-json v0.10.5
+	github.com/goccy/go-json v0.10.6
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/mark3labs/mcp-go v0.45.0
 	github.com/sergi/go-diff v1.4.0
