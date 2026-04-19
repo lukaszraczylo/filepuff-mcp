@@ -5,6 +5,12 @@ version: 2
 
 project_name: mcp-filepuff
 
+# Split mode by full target (goos+goarch). Each matrix runner only builds the
+# artifact matching its own architecture, avoiding CGO cross-compile failures
+# (ARM asm on x86 runners and vice versa).
+partial:
+  by: target
+
 before:
   hooks:
     - go mod tidy
