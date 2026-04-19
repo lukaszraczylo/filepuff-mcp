@@ -59,6 +59,15 @@ detect_platform() {
             ;;
     esac
 
+    # Intel Macs are no longer receiving macOS updates; we only ship Apple
+    # Silicon builds. Users on older hardware can build from source.
+    if [ "$os" = "darwin" ] && [ "$arch" = "amd64" ]; then
+        print_error "macOS Intel (x86_64) is no longer supported."
+        print_error "Apple Silicon binaries are available; for Intel, build from source:"
+        print_error "  https://github.com/lukaszraczylo/filepuff-mcp#build-from-source"
+        exit 1
+    fi
+
     echo "${os}_${arch}"
 }
 
