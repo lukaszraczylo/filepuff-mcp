@@ -219,11 +219,9 @@ func (s *Searcher) buildArgs(req *Request) []string {
 		args = append(args, "--no-ignore")
 	}
 
-	// Global result cap — --max-total-count stops rg early across all files.
-	// Requires ripgrep >= 13.0. In-process truncation in parseOutput is kept as a safety net.
-	if req.MaxResults > 0 {
-		args = append(args, fmt.Sprintf("--max-total-count=%d", req.MaxResults))
-	}
+	// Result cap enforced in-process by parseOutput. rg has no cross-file
+	// total-count flag in stable releases, so we don't pass one; --max-count is
+	// per-file and would miss results unevenly.
 
 	// Add pattern
 	args = append(args, "--", req.Pattern)

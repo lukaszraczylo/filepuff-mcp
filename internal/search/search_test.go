@@ -94,8 +94,8 @@ func TestBuildArgs(t *testing.T) {
 				MaxResults: 10,
 				Regex:      true,
 			},
-			expected:    []string{"--json", "--max-total-count=10", "--", "test", "."},
-			notExpected: []string{"--ignore-case", "--fixed-strings"},
+			expected:    []string{"--json", "--", "test", "."},
+			notExpected: []string{"--ignore-case", "--fixed-strings", "--max-total-count=10", "--max-count=10"},
 		},
 	}
 
