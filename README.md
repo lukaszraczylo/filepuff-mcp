@@ -58,12 +58,8 @@ Claude Code configuration (`.claude/settings.json`):
 Download pre-built binaries from the [releases page](https://github.com/lukaszraczylo/filepuff-mcp/releases):
 
 ```bash
-# macOS (ARM64)
+# macOS (Apple Silicon)
 curl -fsSL -o mcp-filepuff https://github.com/lukaszraczylo/filepuff-mcp/releases/latest/download/mcp-filepuff_<version>_darwin_arm64
-chmod +x mcp-filepuff && mv mcp-filepuff ~/.local/bin/
-
-# macOS (AMD64)
-curl -fsSL -o mcp-filepuff https://github.com/lukaszraczylo/filepuff-mcp/releases/latest/download/mcp-filepuff_<version>_darwin_amd64
 chmod +x mcp-filepuff && mv mcp-filepuff ~/.local/bin/
 
 # Linux (ARM64)
