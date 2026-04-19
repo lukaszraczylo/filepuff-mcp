@@ -5,6 +5,12 @@ version: 2
 
 project_name: mcp-filepuff
 
+# Split mode by full target (goos+goarch). Each matrix runner only builds the
+# artifact matching its own architecture, avoiding CGO cross-compile failures
+# (ARM asm on x86 runners and vice versa).
+partial:
+  by: target
+
 before:
   hooks:
     - go mod tidy
@@ -36,20 +42,15 @@ builds:
 
 archives:
   - id: default
+    # Ship raw binaries — downloaders curl the asset and run it directly
+    # (Windows gets .exe appended automatically). No tarball indirection.
     formats:
-      - tar.gz
+      - binary
     name_template: >-
       {{ .ProjectName }}_
       {{- .Version }}_
       {{- .Os }}_
       {{- .Arch }}
-    files:
-      - LICENSE
-      - README.md
-    format_overrides:
-      - goos: windows
-        formats:
-          - zip
 
 checksum:
   name_template: 'checksums.txt'
