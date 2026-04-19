@@ -13,43 +13,46 @@ import (
 
 // Config holds all configuration options for the MCP server.
 type Config struct {
-	Formatters       map[string]string `json:"formatters"`
-	WorkspaceRoot    string            `json:"workspace_root"`
-	LSPTimeout       time.Duration     `json:"lsp_timeout"`
-	SearchTimeout    time.Duration     `json:"search_timeout"`
-	MaxFileSize      int64             `json:"max_file_size"`
-	MaxParseSize     int64             `json:"max_parse_size"`
-	MaxSearchResults int               `json:"max_search_results"`
-	MaxEditSize      int64             `json:"max_edit_size"`
-	EnableLSP        bool              `json:"enable_lsp"`
-	FollowSymlinks   bool              `json:"follow_symlinks"`
-	RespectGitignore bool              `json:"respect_gitignore"`
+	Formatters                 map[string]string `json:"formatters"`
+	WorkspaceRoot              string            `json:"workspace_root"`
+	LSPTimeout                 time.Duration     `json:"lsp_timeout"`
+	SearchTimeout              time.Duration     `json:"search_timeout"`
+	MaxFileSize                int64             `json:"max_file_size"`
+	MaxParseSize               int64             `json:"max_parse_size"`
+	MaxSearchResults           int               `json:"max_search_results"`
+	MaxEditSize                int64             `json:"max_edit_size"`
+	EnableLSP                  bool              `json:"enable_lsp"`
+	FollowSymlinks             bool              `json:"follow_symlinks"`
+	RespectGitignore           bool              `json:"respect_gitignore"`
+	ResourceLinkThresholdBytes int               `json:"resource_link_threshold_bytes"`
 }
 
 // Default values for configuration.
 const (
-	DefaultLSPTimeout       = 5 * time.Minute
-	DefaultSearchTimeout    = 30 * time.Second
-	DefaultMaxFileSize      = 10 * 1024 * 1024 // 10 MB
-	DefaultMaxParseSize     = 10 * 1024 * 1024 // 10 MB
-	DefaultMaxSearchResults = 1000
-	DefaultMaxEditSize      = 100 * 1024 // 100 KB
+	DefaultLSPTimeout                 = 5 * time.Minute
+	DefaultSearchTimeout              = 30 * time.Second
+	DefaultMaxFileSize                = 10 * 1024 * 1024 // 10 MB
+	DefaultMaxParseSize               = 10 * 1024 * 1024 // 10 MB
+	DefaultMaxSearchResults           = 1000
+	DefaultMaxEditSize                = 100 * 1024 // 100 KB
+	DefaultResourceLinkThresholdBytes = 64 * 1024  // 64 KiB
 )
 
 // Default returns a Config with default values.
 func Default() *Config {
 	return &Config{
-		WorkspaceRoot:    ".",
-		LSPTimeout:       DefaultLSPTimeout,
-		SearchTimeout:    DefaultSearchTimeout,
-		MaxFileSize:      DefaultMaxFileSize,
-		MaxParseSize:     DefaultMaxParseSize,
-		MaxSearchResults: DefaultMaxSearchResults,
-		MaxEditSize:      DefaultMaxEditSize,
-		EnableLSP:        true,
-		Formatters:       make(map[string]string),
-		FollowSymlinks:   true,
-		RespectGitignore: true,
+		WorkspaceRoot:              ".",
+		LSPTimeout:                 DefaultLSPTimeout,
+		SearchTimeout:              DefaultSearchTimeout,
+		MaxFileSize:                DefaultMaxFileSize,
+		MaxParseSize:               DefaultMaxParseSize,
+		MaxSearchResults:           DefaultMaxSearchResults,
+		MaxEditSize:                DefaultMaxEditSize,
+		EnableLSP:                  true,
+		Formatters:                 make(map[string]string),
+		FollowSymlinks:             true,
+		RespectGitignore:           true,
+		ResourceLinkThresholdBytes: DefaultResourceLinkThresholdBytes,
 	}
 }
 

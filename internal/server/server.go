@@ -33,16 +33,17 @@ const PreviewLineMaxLength = 100
 
 // Server represents the MCP file operations server.
 type Server struct {
-	cfg        *config.Config
-	logger     *slog.Logger
-	mcp        *server.MCPServer
-	searcher   *search.Searcher
-	parser     *parser.Registry
-	matcher    *query.Matcher
-	lspManager *lsp.Manager
-	editor     *edit.Engine
-	readSem    chan struct{} // Semaphore for limiting concurrent file reads
-	querySem   chan struct{} // Semaphore for limiting concurrent AST queries
+	cfg          *config.Config
+	logger       *slog.Logger
+	mcp          *server.MCPServer
+	searcher     *search.Searcher
+	parser       *parser.Registry
+	matcher      *query.Matcher
+	lspManager   *lsp.Manager
+	editor       *edit.Engine
+	readSem      chan struct{}   // Semaphore for limiting concurrent file reads
+	querySem     chan struct{}   // Semaphore for limiting concurrent AST queries
+	sessionPrefs sessionPrefsPtr // Atomic pointer; populated by OnAfterInitialize hook
 }
 
 // New creates a new MCP server instance.
@@ -70,40 +71,48 @@ func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
 		s.lspManager = lsp.NewManager(cfg.WorkspaceRoot, logger)
 	}
 
+	// Build OnAfterInitialize hook that parses client capability prefs.
+	// Signature (from mcp-go v0.48.0 hooks.go):
+	//   func(ctx context.Context, id any, message *mcp.InitializeRequest, result *mcp.InitializeResult)
+	hooks := &server.Hooks{}
+	hooks.AddAfterInitialize(func(_ context.Context, _ any, msg *mcp.InitializeRequest, _ *mcp.InitializeResult) {
+		if msg == nil {
+			return
+		}
+		raw, _ := msg.Params.Capabilities.Experimental["filepuff"].(map[string]any)
+		prefs := ParseSessionPrefs(raw)
+		s.sessionPrefs.Store(&prefs)
+	})
+
 	// Create MCP server
 	mcpServer := server.NewMCPServer(
 		"mcp-filepuff",
-		"1.0.0",
+		"2.0.0",
 		server.WithLogging(),
+		server.WithHooks(hooks),
 	)
 	s.mcp = mcpServer
 
 	// Register tools
 	s.registerTools()
 
+	// Register help resources (filepuff://help/<tool>)
+	s.registerResources()
+
+	// Register filepuff://read/{+path} resource template for large-file access.
+	s.registerReadResource()
+
 	return s, nil
 }
 
 // registerTools registers all available tools with the MCP server.
 func (s *Server) registerTools() {
-	// Register ping tool for health checks
-	s.mcp.AddTool(
-		mcp.NewTool("ping",
-			mcp.WithDescription("Health check - returns pong to verify the server is running.\n\n"+
-				"Returns: \"pong\" text string."),
-			mcp.WithReadOnlyHintAnnotation(true),
-		),
-		s.handlePing,
-	)
-
 	// Register file_search tool
 	if s.searcher != nil {
 		s.mcp.AddTool(
 			mcp.NewTool("file_search",
-				mcp.WithDescription("Search for text patterns in files using ripgrep. Supports regex patterns, file type filtering, and context lines.\n\n"+
-					"Returns: Results grouped by file with match context. Format: \"Found N matches in M files:\" followed by file sections, "+
-					"each with matching lines prefixed by \"L{line}│\" and context lines prefixed by \"   │\".\n\n"+
-					"Example: {\"pattern\": \"func.*Error\", \"file_types\": [\"go\"], \"max_results\": 20}"),
+				mcp.WithDescription("Search for text patterns in files using ripgrep. Supports regex patterns, file type filtering, and context lines. "+
+					"See resource filepuff://help/file_search for flags and examples."),
 				mcp.WithReadOnlyHintAnnotation(true),
 				mcp.WithString("pattern",
 					mcp.Required(),
@@ -127,7 +136,16 @@ func (s *Server) registerTools() {
 					mcp.Description("Number of context lines around matches (default: 2)"),
 				),
 				mcp.WithNumber("max_results",
-					mcp.Description("Maximum number of results to return"),
+					mcp.Description("Maximum number of results to return (page size for pagination)"),
+				),
+				mcp.WithBoolean("cluster",
+					mcp.Description("Coalesce consecutive match lines into ranges (L12-14│ text). Drops context lines. Default: false."),
+				),
+				mcp.WithString("cursor",
+					mcp.Description("Pagination cursor from a previous truncated response. Pass back to fetch the next page."),
+				),
+				mcp.WithBoolean("verbose",
+					mcp.Description("Emit \"Found N matches in M files:\" preamble. Default: false (v2 default)."),
 				),
 			),
 			s.handleFileSearch,
@@ -137,23 +155,8 @@ func (s *Server) registerTools() {
 	// Register file_read tool
 	s.mcp.AddTool(
 		mcp.NewTool("file_read",
-			mcp.WithDescription("Read a file's contents with optional line range and AST symbol summary.\n\n"+
-				"Token-saving features:\n"+
-				"  previous_etag: skip re-reading unchanged files (returns '[unchanged, etag: ...]' if unchanged)\n"+
-				"  symbol_name: read only a named function/struct/class (eliminates ast_query round-trip)\n"+
-				"  symbols_only=true: return only symbol list, ~95% fewer tokens (requires include_ast=true)\n"+
-				"  no_line_numbers=true: strip the line-number prefix (~10%% savings)\n"+
-				"  line_number_interval=N: print line numbers only every N lines\n"+
-				"  collapse_blank_lines=true: collapse consecutive blank lines to one\n"+
-				"  max_lines=N: truncate output with omitted count notice\n"+
-				"  paths=[...]: read multiple files in one call\n\n"+
-				"All responses include '[etag: hex]' footer for use as previous_etag in subsequent reads.\n\n"+
-				"Examples:\n"+
-				"  Full file:   {\"path\": \"main.go\"}\n"+
-				"  Etag check: {\"path\": \"main.go\", \"previous_etag\": \"a3f9c2b1\"}\n"+
-				"  By symbol:  {\"path\": \"server.go\", \"symbol_name\": \"handleFileRead\"}\n"+
-				"  Batch:      {\"paths\": [\"a.go\", \"b.go\"]}\n"+
-				"  Line range: {\"path\": \"main.go\", \"line_start\": 10, \"line_end\": 50}"),
+			mcp.WithDescription("Read a file's contents with optional line range and AST symbol summary. "+
+				"See resource filepuff://help/file_read for flags and examples."),
 			mcp.WithReadOnlyHintAnnotation(true),
 			mcp.WithString("path",
 				mcp.Description("Path to the file to read (required unless paths is provided)"),
@@ -181,19 +184,35 @@ func (s *Server) registerTools() {
 				mcp.Description("Include AST symbol summary (functions, classes, types, etc.)"),
 			),
 			mcp.WithBoolean("symbols_only",
-				mcp.Description("Return only symbol summary without file content (token-efficient mode). Requires include_ast=true."),
+				mcp.Description("Return only symbol summary without file content (token-efficient mode). Requires include_ast=true. Alias: mode='symbols_only'."),
+			),
+			mcp.WithString("mode",
+				mcp.Description("Output mode: 'full' (default, full file), 'skeleton' (signatures + { ... } stubs, bodies elided), 'symbols_only' (symbol list only, alias for symbols_only=true)."),
+			),
+			mcp.WithArray("strip",
+				mcp.Description("Strip content classes before line-numbering. Values: 'imports' (remove import blocks), 'license' (remove leading license comment), 'block_comments' (remove /* */ and Python triple-quoted strings). Emits [stripped: ...] footer."),
+				mcp.WithStringItems(),
 			),
 			mcp.WithNumber("max_lines",
 				mcp.Description("Maximum number of lines to return (for token efficiency). Applied after line_start/line_end."),
 			),
 			mcp.WithBoolean("no_line_numbers",
-				mcp.Description("Omit the '  12│ ' line number prefix entirely. Saves ~10% tokens. line_number_interval=0 has the same effect."),
+				mcp.Description("Omit the '  12\u2502 ' line number prefix entirely. Saves ~10% tokens. line_number_interval=0 has the same effect."),
 			),
 			mcp.WithNumber("line_number_interval",
 				mcp.Description("Print line numbers only every N lines (default: 1 = every line). E.g. 10 = anchor every 10th line plus first/last. 0 = no line numbers."),
 			),
+			mcp.WithBoolean("compact_line_numbers",
+				mcp.Description("Use compact line prefix '12\u2502' instead of '  12\u2502 ' (no padding, no trailing space). Works with line_number_interval. Default off."),
+			),
 			mcp.WithBoolean("collapse_blank_lines",
 				mcp.Description("Collapse runs of consecutive blank lines to a single blank line. Useful for token savings on heavily-spaced code."),
+			),
+			mcp.WithBoolean("force_inline",
+				mcp.Description("Always return file content inline, bypassing the resource-link threshold. Default: false."),
+			),
+			mcp.WithNumber("max_inline_bytes",
+				mcp.Description("Per-call inline threshold override in bytes. If set, overrides server resource_link_threshold_bytes for this call only. 0 = use server default."),
 			),
 		),
 		s.handleFileRead,
@@ -202,13 +221,8 @@ func (s *Server) registerTools() {
 	// Register ast_query tool
 	s.mcp.AddTool(
 		mcp.NewTool("ast_query",
-			mcp.WithDescription("Search for AST patterns in code files. Use code patterns with $VAR placeholders to match and capture code structures like functions, classes, and types.\n\n"+
-				"Returns: \"Found N match(es):\" followed by entries in format \"**file:line** (node_type)\" with code blocks "+
-				"and captured variables ($NAME=value). Returns \"No matches found.\" when no results.\n\n"+
-				"Examples:\n"+
-				"  Go error funcs: {\"pattern\": \"func $NAME($$$ARGS) error\", \"language\": \"go\"}\n"+
-				"  Python classes:  {\"pattern\": \"class $NAME: $$$BODY\", \"language\": \"python\"}\n"+
-				"  Named function: {\"pattern\": \"func $NAME($$$ARGS)\", \"language\": \"go\", \"name_exact\": \"NewServer\"}"),
+			mcp.WithDescription("Search for AST patterns in code files. Use code patterns with $VAR placeholders to match and capture code structures like functions, classes, and types. "+
+				"See resource filepuff://help/ast_query for flags and examples."),
 			mcp.WithReadOnlyHintAnnotation(true),
 			mcp.WithString("pattern",
 				mcp.Required(),
@@ -233,7 +247,16 @@ func (s *Server) registerTools() {
 				mcp.WithStringItems(),
 			),
 			mcp.WithNumber("max_results",
-				mcp.Description("Maximum number of results to return (default: 100)"),
+				mcp.Description("Maximum number of results to return (default: 100, page size for pagination)"),
+			),
+			mcp.WithString("format",
+				mcp.Description("Output format: \"verbose\" (default, full code+captures), \"compact\" (one line per match), \"location\" (file:line only)"),
+			),
+			mcp.WithString("cursor",
+				mcp.Description("Pagination cursor from a previous truncated response. Pass back to fetch the next page."),
+			),
+			mcp.WithBoolean("verbose",
+				mcp.Description("Emit \"Found N match(es):\" preamble. Default: false (v2 default)."),
 			),
 		),
 		s.handleASTQuery,
@@ -241,62 +264,15 @@ func (s *Server) registerTools() {
 
 	// Register LSP-based tools if LSP is enabled
 	if s.lspManager != nil {
-		// Register symbol_at tool
 		s.mcp.AddTool(
-			mcp.NewTool("symbol_at",
-				mcp.WithDescription("Get information about the symbol at a specific position in a file. Returns type, documentation, and definition location using LSP when available.\n\n"+
-					"Returns: \"**Symbol Information**\" followed by hover/type information from LSP, or \"**Symbol Information** (AST fallback)\" "+
-					"with node type and text when LSP unavailable. Returns \"No symbol information available at this position.\" when nothing is found.\n\n"+
-					"Example: {\"file\": \"server.go\", \"line\": 45, \"column\": 6}"),
+			mcp.NewTool("lsp_query",
+				mcp.WithDescription("Query LSP for symbol info, definition, or references at a specific file position. "+
+					"See resource filepuff://help/lsp_query for flags and examples."),
 				mcp.WithReadOnlyHintAnnotation(true),
-				mcp.WithString("file",
+				mcp.WithString("action",
 					mcp.Required(),
-					mcp.Description("Path to the file"),
+					mcp.Description("LSP operation: hover | definition | references"),
 				),
-				mcp.WithNumber("line",
-					mcp.Required(),
-					mcp.Description("Line number (1-indexed)"),
-				),
-				mcp.WithNumber("column",
-					mcp.Required(),
-					mcp.Description("Column number (1-indexed)"),
-				),
-			),
-			s.handleSymbolAt,
-		)
-
-		// Register find_definition tool
-		s.mcp.AddTool(
-			mcp.NewTool("find_definition",
-				mcp.WithDescription("Find the definition of the symbol at a specific position. Uses LSP to locate where a function, variable, type, etc. is defined.\n\n"+
-					"Returns: \"Found N definition(s):\" with entries showing \"**file:line:column**\" and a 3-line code preview "+
-					"with the target line marked by \">\". Returns \"No definition found.\" when the symbol has no definition.\n\n"+
-					"Example: {\"file\": \"handler.go\", \"line\": 23, \"column\": 10}"),
-				mcp.WithReadOnlyHintAnnotation(true),
-				mcp.WithString("file",
-					mcp.Required(),
-					mcp.Description("Path to the file"),
-				),
-				mcp.WithNumber("line",
-					mcp.Required(),
-					mcp.Description("Line number (1-indexed)"),
-				),
-				mcp.WithNumber("column",
-					mcp.Required(),
-					mcp.Description("Column number (1-indexed)"),
-				),
-			),
-			s.handleFindDefinition,
-		)
-
-		// Register find_references tool
-		s.mcp.AddTool(
-			mcp.NewTool("find_references",
-				mcp.WithDescription("Find all references to the symbol at a specific position. Uses LSP to locate all usages of a function, variable, type, etc.\n\n"+
-					"Returns: \"Found N reference(s):\" grouped by file, each showing \"**file** (count)\" with locations as "+
-					"\"L{line}:{column}\". Returns \"No references found.\" when no usages exist.\n\n"+
-					"Example: {\"file\": \"types.go\", \"line\": 5, \"column\": 6}"),
-				mcp.WithReadOnlyHintAnnotation(true),
 				mcp.WithString("file",
 					mcp.Required(),
 					mcp.Description("Path to the file"),
@@ -310,23 +286,24 @@ func (s *Server) registerTools() {
 					mcp.Description("Column number (1-indexed)"),
 				),
 				mcp.WithBoolean("include_declaration",
-					mcp.Description("Include the declaration in results (default: true)"),
+					mcp.Description("Include the declaration in results. Only valid for action=references (default: true)."),
+				),
+				mcp.WithBoolean("compact",
+					mcp.Description("Compact output: one line per file with all refs in brackets. Only valid for action=references. Default: false."),
+				),
+				mcp.WithBoolean("verbose",
+					mcp.Description("Emit count/header preamble. Applies to all actions. Default: false."),
 				),
 			),
-			s.handleFindReferences,
+			s.handleLSPQuery,
 		)
 	}
 
 	// Register edit tools
 	s.mcp.AddTool(
 		mcp.NewTool("edit_apply",
-			mcp.WithDescription("Apply an edit to a file. Uses AST-aware editing for code files (Go, TypeScript, JavaScript, Python, C, C++, Rust) with syntax validation, and text-based editing for other files (Markdown, JSON, YAML, config files, etc.).\n\n"+
-				"Returns: \"**Edit Applied Successfully**\" followed by a unified diff of the changes made. "+
-				"For code files, validates syntax before writing — returns an error if the edit would produce invalid syntax.\n\n"+
-				"Examples:\n"+
-				"  AST mode: {\"file\": \"main.go\", \"operation\": \"replace\", \"selector_kind\": \"function_declaration\", \"selector_name\": \"Hello\", \"new_content\": \"func Hello() {\\n\\treturn\\n}\"}\n"+
-				"  Text mode: {\"file\": \"README.md\", \"operation\": \"replace\", \"selector_text\": \"## Old Header\", \"new_content\": \"## New Header\"}\n"+
-				"  Line range: {\"file\": \"config.yaml\", \"operation\": \"replace\", \"selector_line\": 5, \"selector_line_end\": 10, \"new_content\": \"key: value\"}"),
+			mcp.WithDescription("Apply an edit to a file. Uses AST-aware editing for code files (Go, TypeScript, JavaScript, Python, C, C++, Rust) with syntax validation, and text-based editing for other files (Markdown, JSON, YAML, config files, etc.). "+
+				"See resource filepuff://help/edit_apply for flags and examples."),
 			mcp.WithString("file",
 				mcp.Required(),
 				mcp.Description("Path to the file to edit"),
@@ -362,17 +339,15 @@ func (s *Server) registerTools() {
 			mcp.WithString("selector_pattern",
 				mcp.Description("Regex pattern to match (text mode). Must be unique or use selector_index."),
 			),
+			mcp.WithString("response",
+				mcp.Description("Response format: \"count\" (default, \"+3 -1\" line counts), \"diff\" (full unified diff), \"none\" (empty). Default: count."),
+			),
 			mcp.WithBoolean("compact_response",
-				mcp.Description("Return only the modified symbol's content instead of a full diff. Requires selector_name. Saves tokens on large-file edits."),
+				mcp.Description("Deprecated: use response=count. Alias for response=\"count\" kept for pre-v2 compatibility."),
 			),
 		),
 		s.handleEditApply,
 	)
-}
-
-// handlePing handles the ping health check tool.
-func (s *Server) handlePing(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	return mcp.NewToolResultText("pong"), nil
 }
 
 // Run starts the MCP server and blocks until shutdown.

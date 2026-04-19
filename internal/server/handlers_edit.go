@@ -4,12 +4,10 @@ package server
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/lukaszraczylo/mcp-filepuff/internal/edit"
 	"github.com/lukaszraczylo/mcp-filepuff/pkg/errors"
-	"github.com/lukaszraczylo/mcp-filepuff/pkg/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -82,27 +80,56 @@ func (s *Server) handleEdit(ctx context.Context, request mcp.CallToolRequest) (*
 		return mcp.NewToolResultError(result.Error), nil
 	}
 
-	// compact_response: return just the modified symbol instead of the full diff
-	if request.GetBool("compact_response", false) && selectorName != "" {
-		if content, readErr := os.ReadFile(file); readErr == nil {
-			if start, end, found := s.resolveSymbolLines(ctx, file, content, selectorName, protocol.SymbolKind("")); found {
-				lines := splitLines(string(content))
-				var sb strings.Builder
-				sb.WriteString(fmt.Sprintf("**Edit Applied** — %s (L%d-L%d):\n\n", selectorName, start, end))
-				for i := start - 1; i < end && i < len(lines); i++ {
-					sb.WriteString(fmt.Sprintf("%4d| %s\n", i+1, lines[i]))
-				}
-				return mcp.NewToolResultText(sb.String()), nil
-			}
-		}
-		// fall through to diff if symbol lookup fails
+	// Determine response mode.
+	// compact_response is a deprecated alias for response="count".
+	respMode := request.GetString("response", "count")
+	if request.GetBool("compact_response", false) {
+		// Deprecated: use response=count
+		respMode = "count"
 	}
 
-	var output strings.Builder
-	output.WriteString("**Edit Applied Successfully**\n\n")
-	output.WriteString("Diff:\n```diff\n")
-	output.WriteString(result.Diff)
-	output.WriteString("```\n")
+	switch respMode {
+	case "none":
+		return mcp.NewToolResultText(""), nil
 
-	return mcp.NewToolResultText(output.String()), nil
+	case "count":
+		// Compute +added/-removed line counts from the unified diff.
+		added, removed := countDiffLines(result.Diff)
+		return mcp.NewToolResultText(fmt.Sprintf("+%d -%d", added, removed)), nil
+
+	case "diff":
+		var output strings.Builder
+		output.WriteString("Diff:\n```diff\n")
+		output.WriteString(result.Diff)
+		output.WriteString("```\n")
+		return mcp.NewToolResultText(output.String()), nil
+
+	default:
+		// Fallback: treat unknown values as "diff" for safety.
+		var output strings.Builder
+		output.WriteString("Diff:\n```diff\n")
+		output.WriteString(result.Diff)
+		output.WriteString("```\n")
+		return mcp.NewToolResultText(output.String()), nil
+	}
+}
+
+// countDiffLines counts added (+) and removed (-) lines in a unified diff string.
+func countDiffLines(diff string) (added, removed int) {
+	for _, line := range strings.Split(diff, "\n") {
+		if len(line) == 0 {
+			continue
+		}
+		switch line[0] {
+		case '+':
+			if !strings.HasPrefix(line, "+++") {
+				added++
+			}
+		case '-':
+			if !strings.HasPrefix(line, "---") {
+				removed++
+			}
+		}
+	}
+	return
 }

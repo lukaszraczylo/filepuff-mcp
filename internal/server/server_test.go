@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lukaszraczylo/mcp-filepuff/internal/config"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -46,45 +47,6 @@ func TestNew(t *testing.T) {
 
 	if srv.editor == nil {
 		t.Error("editor should not be nil")
-	}
-}
-
-func TestHandlePing(t *testing.T) {
-	tmpDir := t.TempDir()
-	cfg := &config.Config{WorkspaceRoot: tmpDir, EnableLSP: false}
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-
-	srv, err := New(cfg, logger)
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-
-	ctx := context.Background()
-	req := mcp.CallToolRequest{}
-
-	result, err := srv.handlePing(ctx, req)
-	if err != nil {
-		t.Errorf("handlePing() error = %v", err)
-	}
-
-	if result == nil {
-		t.Fatal("handlePing() returned nil result")
-		return
-	}
-
-	// Check that the result contains "pong"
-	contents := result.Content
-	if len(contents) == 0 {
-		t.Fatal("handlePing() returned empty content")
-	}
-
-	textContent, ok := contents[0].(mcp.TextContent)
-	if !ok {
-		t.Fatal("handlePing() did not return text content")
-	}
-
-	if textContent.Text != "pong" {
-		t.Errorf("handlePing() = %v, want 'pong'", textContent.Text)
 	}
 }
 
@@ -482,5 +444,263 @@ func TestSplitLinesLongLine(t *testing.T) {
 	}
 	if !foundLong {
 		t.Error("the 500KB long line was not found in splitLines output")
+	}
+}
+
+// TestHandleEditApplyResponseCount verifies the default response=count format "+N -M".
+func TestHandleEditApplyResponseCount(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "test.go")
+	content := `package main
+
+func Hello() {
+	println("Hello")
+}
+`
+	if err := os.WriteFile(testFile, []byte(content), 0600); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	cfg := &config.Config{WorkspaceRoot: tmpDir, EnableLSP: false}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	srv, err := New(cfg, logger)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	ctx := context.Background()
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]interface{}{
+		"file":          testFile,
+		"operation":     "replace",
+		"selector_kind": "function_declaration",
+		"selector_name": "Hello",
+		"new_content":   "func Hello() {\n\tprintln(\"Goodbye\")\n}",
+		// no response flag → default "count"
+	}
+
+	result, err := srv.handleEditApply(ctx, req)
+	if err != nil {
+		t.Fatalf("handleEditApply error = %v", err)
+	}
+	if result == nil || len(result.Content) == 0 {
+		t.Fatal("handleEditApply returned empty result")
+	}
+	textContent, ok := result.Content[0].(mcp.TextContent)
+	if !ok {
+		t.Fatal("expected text content")
+	}
+	// Should be "+N -M" format
+	text := textContent.Text
+	if !strings.HasPrefix(text, "+") {
+		t.Errorf("response=count should start with +, got: %q", text)
+	}
+	if !strings.Contains(text, " -") {
+		t.Errorf("response=count should contain -N, got: %q", text)
+	}
+	// Must NOT contain diff syntax or old preamble
+	if strings.Contains(text, "@@") || strings.Contains(text, "Edit Applied") {
+		t.Errorf("response=count must not contain diff markers, got: %q", text)
+	}
+}
+
+// TestHandleEditApplyResponseDiff verifies response=diff returns unified diff.
+func TestHandleEditApplyResponseDiff(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "test.go")
+	content := `package main
+
+func Hello() {
+	println("Hello")
+}
+`
+	if err := os.WriteFile(testFile, []byte(content), 0600); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	cfg := &config.Config{WorkspaceRoot: tmpDir, EnableLSP: false}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	srv, err := New(cfg, logger)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	ctx := context.Background()
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]interface{}{
+		"file":          testFile,
+		"operation":     "replace",
+		"selector_kind": "function_declaration",
+		"selector_name": "Hello",
+		"new_content":   "func Hello() {\n\tprintln(\"Goodbye\")\n}",
+		"response":      "diff",
+	}
+
+	result, err := srv.handleEditApply(ctx, req)
+	if err != nil {
+		t.Fatalf("handleEditApply error = %v", err)
+	}
+	if result == nil || len(result.Content) == 0 {
+		t.Fatal("handleEditApply returned empty result")
+	}
+	textContent, ok := result.Content[0].(mcp.TextContent)
+	if !ok {
+		t.Fatal("expected text content")
+	}
+	text := textContent.Text
+	if !strings.Contains(text, "diff") {
+		t.Errorf("response=diff should contain diff, got: %q", text)
+	}
+	// Must NOT have old "Edit Applied Successfully" preamble
+	if strings.Contains(text, "Edit Applied Successfully") {
+		t.Errorf("v2 diff should not have old preamble, got: %q", text)
+	}
+}
+
+// TestHandleEditApplyResponseNone verifies response=none returns empty string.
+func TestHandleEditApplyResponseNone(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "test.go")
+	content := `package main
+
+func Hello() {
+	println("Hello")
+}
+`
+	if err := os.WriteFile(testFile, []byte(content), 0600); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	cfg := &config.Config{WorkspaceRoot: tmpDir, EnableLSP: false}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	srv, err := New(cfg, logger)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	ctx := context.Background()
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]interface{}{
+		"file":          testFile,
+		"operation":     "replace",
+		"selector_kind": "function_declaration",
+		"selector_name": "Hello",
+		"new_content":   "func Hello() {\n\tprintln(\"Goodbye\")\n}",
+		"response":      "none",
+	}
+
+	result, err := srv.handleEditApply(ctx, req)
+	if err != nil {
+		t.Fatalf("handleEditApply error = %v", err)
+	}
+	if result == nil || len(result.Content) == 0 {
+		t.Fatal("handleEditApply returned empty result")
+	}
+	textContent, ok := result.Content[0].(mcp.TextContent)
+	if !ok {
+		t.Fatal("expected text content")
+	}
+	if textContent.Text != "" {
+		t.Errorf("response=none should return empty string, got: %q", textContent.Text)
+	}
+}
+
+// TestHandleFileReadBatchDedup verifies that identical files in batch mode emit [duplicate of ...].
+func TestHandleFileReadBatchDedup(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "a.go")
+	content := `package main
+
+func Hello() {}
+`
+	if err := os.WriteFile(testFile, []byte(content), 0600); err != nil {
+		t.Fatalf("failed to write a.go: %v", err)
+	}
+	// Make b.go with identical content
+	testFile2 := filepath.Join(tmpDir, "b.go")
+	if err := os.WriteFile(testFile2, []byte(content), 0600); err != nil {
+		t.Fatalf("failed to write b.go: %v", err)
+	}
+	// c.go with different content
+	testFile3 := filepath.Join(tmpDir, "c.go")
+	if err := os.WriteFile(testFile3, []byte("package main\n"), 0600); err != nil {
+		t.Fatalf("failed to write c.go: %v", err)
+	}
+
+	cfg := &config.Config{WorkspaceRoot: tmpDir, EnableLSP: false, MaxFileSize: 1024 * 1024}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	srv, err := New(cfg, logger)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	ctx := context.Background()
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]interface{}{
+		"paths": []interface{}{testFile, testFile2, testFile3},
+	}
+
+	result, err := srv.handleFileRead(ctx, req)
+	if err != nil {
+		t.Fatalf("handleFileRead() error = %v", err)
+	}
+	if result == nil || len(result.Content) == 0 {
+		t.Fatal("handleFileRead() returned empty result")
+	}
+	textContent, ok := result.Content[0].(mcp.TextContent)
+	if !ok {
+		t.Fatal("expected text content")
+	}
+	text := textContent.Text
+	if !strings.Contains(text, "[duplicate of") {
+		t.Errorf("expected duplicate pointer for b.go, got:\n%s", text)
+	}
+	// a.go should have full content
+	if !strings.Contains(text, "--- "+testFile+" ---") {
+		t.Errorf("expected a.go header, got:\n%s", text)
+	}
+	// c.go should have full content (different hash)
+	if !strings.Contains(text, "--- "+testFile3+" ---") {
+		t.Errorf("expected c.go header, got:\n%s", text)
+	}
+}
+
+// TestHandleFileSearchVerbose verifies verbose=true emits "Found N matches in M files:" preamble.
+func TestHandleFileSearchVerbose(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "test.go")
+	if err := os.WriteFile(testFile, []byte("package main\n\nfunc Hello() {}\n"), 0600); err != nil {
+		t.Fatalf("write test file: %v", err)
+	}
+	cfg := &config.Config{WorkspaceRoot: tmpDir, EnableLSP: false, MaxFileSize: 1024 * 1024, SearchTimeout: 10 * time.Second}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	srv, err := New(cfg, logger)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if srv.searcher == nil {
+		t.Skip("ripgrep not available")
+	}
+
+	ctx := context.Background()
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]interface{}{
+		"pattern": "Hello",
+		"paths":   []interface{}{tmpDir},
+		"verbose": true,
+	}
+	result, err := srv.handleFileSearch(ctx, req)
+	if err != nil {
+		t.Fatalf("handleFileSearch error = %v", err)
+	}
+	if result == nil || len(result.Content) == 0 {
+		t.Fatal("handleFileSearch returned empty")
+	}
+	textContent, ok := result.Content[0].(mcp.TextContent)
+	if !ok {
+		t.Fatal("expected text content")
+	}
+	if !strings.Contains(textContent.Text, "Found ") {
+		t.Errorf("verbose=true should emit preamble, got:\n%s", textContent.Text)
 	}
 }
