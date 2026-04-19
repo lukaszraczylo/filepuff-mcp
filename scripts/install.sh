@@ -59,13 +59,6 @@ detect_platform() {
             ;;
     esac
 
-    # Warn about unsupported combinations
-    if [ "$os" = "linux" ] && [ "$arch" = "arm64" ]; then
-        print_error "Linux ARM64 builds are not currently available due to CGO cross-compilation complexity"
-        print_error "Please build from source: https://github.com/lukaszraczylo/filepuff-mcp#build-from-source"
-        exit 1
-    fi
-
     echo "${os}_${arch}"
 }
 
@@ -73,7 +66,7 @@ check_dependencies() {
     local missing_deps=()
 
     # Check for required commands
-    for cmd in curl tar; do
+    for cmd in curl; do
         if ! command -v "$cmd" &> /dev/null; then
             missing_deps+=("$cmd")
         fi
@@ -210,14 +203,15 @@ download_and_install() {
 
     print_info "Downloading mcp-filepuff ${version} for ${platform}..."
 
-    # Construct download URLs
-    local archive_name="mcp-filepuff_${version#v}_${platform}.tar.gz"
-    local archive_url="https://github.com/${REPO}/releases/download/${version}/${archive_name}"
+    # Releases ship raw binaries named mcp-filepuff_<version>_<os>_<arch>
+    # (with .exe on Windows — not handled here).
+    local asset_name="mcp-filepuff_${version#v}_${platform}"
+    local asset_url="https://github.com/${REPO}/releases/download/${version}/${asset_name}"
     local checksum_url="https://github.com/${REPO}/releases/download/${version}/checksums.txt"
 
-    # Download archive
-    if ! curl -sSfL "$archive_url" -o "$tmpdir/$archive_name"; then
-        print_error "Failed to download $archive_url"
+    # Download binary
+    if ! curl -sSfL "$asset_url" -o "$tmpdir/$asset_name"; then
+        print_error "Failed to download $asset_url"
         exit 1
     fi
 
@@ -227,26 +221,24 @@ download_and_install() {
     else
         print_info "Verifying checksum..."
         cd "$tmpdir"
-        
-        # Extract expected checksum for our archive
+
         local expected_checksum
-        expected_checksum=$(grep "$archive_name" checksums.txt | awk '{print $1}')
-        
+        expected_checksum=$(grep "$asset_name" checksums.txt | awk '{print $1}')
+
         if [ -z "$expected_checksum" ]; then
-            print_warn "Checksum not found for $archive_name, skipping verification"
+            print_warn "Checksum not found for $asset_name, skipping verification"
         else
-            # Calculate actual checksum (use shasum on macOS, sha256sum on Linux)
             local actual_checksum
             if command -v sha256sum &> /dev/null; then
-                actual_checksum=$(sha256sum "$archive_name" | awk '{print $1}')
+                actual_checksum=$(sha256sum "$asset_name" | awk '{print $1}')
             elif command -v shasum &> /dev/null; then
-                actual_checksum=$(shasum -a 256 "$archive_name" | awk '{print $1}')
+                actual_checksum=$(shasum -a 256 "$asset_name" | awk '{print $1}')
             else
                 print_warn "No checksum utility found, skipping verification"
                 cd - > /dev/null
                 return
             fi
-            
+
             if [ "$expected_checksum" = "$actual_checksum" ]; then
                 print_info "Checksum verification passed"
             else
@@ -259,10 +251,6 @@ download_and_install() {
         cd - > /dev/null
     fi
 
-    # Extract archive
-    print_info "Extracting archive..."
-    tar -xzf "$tmpdir/$archive_name" -C "$tmpdir"
-
     # Ensure install directory exists
     if [ ! -d "$INSTALL_DIR" ]; then
         print_info "Creating installation directory: $INSTALL_DIR"
@@ -272,11 +260,11 @@ download_and_install() {
     # Install binary
     print_info "Installing to $INSTALL_DIR/$BINARY_NAME..."
     if [ -w "$INSTALL_DIR" ]; then
-        cp "$tmpdir/$BINARY_NAME" "$INSTALL_DIR/$BINARY_NAME"
+        cp "$tmpdir/$asset_name" "$INSTALL_DIR/$BINARY_NAME"
         chmod +x "$INSTALL_DIR/$BINARY_NAME"
     else
         print_warn "No write permission to $INSTALL_DIR, trying with sudo..."
-        sudo cp "$tmpdir/$BINARY_NAME" "$INSTALL_DIR/$BINARY_NAME"
+        sudo cp "$tmpdir/$asset_name" "$INSTALL_DIR/$BINARY_NAME"
         sudo chmod +x "$INSTALL_DIR/$BINARY_NAME"
     fi
 

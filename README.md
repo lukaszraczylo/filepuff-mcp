@@ -59,24 +59,24 @@ Download pre-built binaries from the [releases page](https://github.com/lukaszra
 
 ```bash
 # macOS (ARM64)
-curl -L https://github.com/lukaszraczylo/filepuff-mcp/releases/latest/download/mcp-filepuff_<version>_darwin_arm64.tar.gz | tar xz
-mv mcp-filepuff ~/.local/bin/
+curl -fsSL -o mcp-filepuff https://github.com/lukaszraczylo/filepuff-mcp/releases/latest/download/mcp-filepuff_<version>_darwin_arm64
+chmod +x mcp-filepuff && mv mcp-filepuff ~/.local/bin/
 
 # macOS (AMD64)
-curl -L https://github.com/lukaszraczylo/filepuff-mcp/releases/latest/download/mcp-filepuff_<version>_darwin_amd64.tar.gz | tar xz
-mv mcp-filepuff ~/.local/bin/
+curl -fsSL -o mcp-filepuff https://github.com/lukaszraczylo/filepuff-mcp/releases/latest/download/mcp-filepuff_<version>_darwin_amd64
+chmod +x mcp-filepuff && mv mcp-filepuff ~/.local/bin/
 
 # Linux (ARM64)
-curl -L https://github.com/lukaszraczylo/filepuff-mcp/releases/latest/download/mcp-filepuff_<version>_linux_arm64.tar.gz | tar xz
-mv mcp-filepuff ~/.local/bin/
+curl -fsSL -o mcp-filepuff https://github.com/lukaszraczylo/filepuff-mcp/releases/latest/download/mcp-filepuff_<version>_linux_arm64
+chmod +x mcp-filepuff && mv mcp-filepuff ~/.local/bin/
 
 # Linux (AMD64)
-curl -L https://github.com/lukaszraczylo/filepuff-mcp/releases/latest/download/mcp-filepuff_<version>_linux_amd64.tar.gz | tar xz
-mv mcp-filepuff ~/.local/bin/
+curl -fsSL -o mcp-filepuff https://github.com/lukaszraczylo/filepuff-mcp/releases/latest/download/mcp-filepuff_<version>_linux_amd64
+chmod +x mcp-filepuff && mv mcp-filepuff ~/.local/bin/
 
 # Windows (PowerShell)
-Invoke-WebRequest -Uri "https://github.com/lukaszraczylo/filepuff-mcp/releases/latest/download/mcp-filepuff_<version>_windows_amd64.zip" -OutFile mcp-filepuff.zip
-Expand-Archive mcp-filepuff.zip -DestinationPath $env:USERPROFILE\.local\bin
+Invoke-WebRequest -Uri "https://github.com/lukaszraczylo/filepuff-mcp/releases/latest/download/mcp-filepuff_<version>_windows_amd64.exe" -OutFile mcp-filepuff.exe
+Move-Item mcp-filepuff.exe $env:USERPROFILE\.local\bin\
 ```
 
 Replace `<version>` with the actual version (e.g., `v1.0.0`).
