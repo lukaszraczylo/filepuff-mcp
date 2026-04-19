@@ -451,62 +451,121 @@ func passesFilters(node *sitter.Node, filters QueryFilters, content []byte) bool
 	return true
 }
 
-// FormatResults formats match results for display.
+// FormatResults formats match results for display (backward-compat wrapper, verbose mode).
 func FormatResults(results []MatchResult, maxResults int) string {
+	return FormatResultsWithOptions(results, maxResults, "verbose", 0)
+}
+
+// FormatResultsWithOptions formats match results with configurable output format.
+// format: "verbose" (default) | "compact" | "location"
+// offset: skip this many results before rendering (used for cursor pagination).
+// verbose: opt-in variadic — pass true to restore "Found N match(es):" preamble (v1 behaviour).
+func FormatResultsWithOptions(results []MatchResult, maxResults int, format string, offset int, verbose ...bool) string {
 	if len(results) == 0 {
 		return "No matches found."
 	}
 
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Found %d match(es):\n\n", len(results)))
-
-	displayCount := len(results)
-	truncated := false
-	if maxResults > 0 && displayCount > maxResults {
-		displayCount = maxResults
-		truncated = true
+	// Apply offset (pagination skip).
+	if offset > 0 {
+		if offset >= len(results) {
+			return "No matches found."
+		}
+		results = results[offset:]
 	}
 
-	for i := 0; i < displayCount; i++ {
-		r := results[i]
-		nodeType := "unknown"
-		if r.Node != nil {
-			nodeType = r.Node.Type()
-		}
-		sb.WriteString(fmt.Sprintf("**%s:%d** (%s)\n", r.File, r.Location.Line, nodeType))
+	// Determine how many to render and whether more remain.
+	renderCount := len(results)
+	remaining := 0
+	if maxResults > 0 && renderCount > maxResults {
+		remaining = renderCount - maxResults
+		renderCount = maxResults
+	}
 
-		// Truncate very long text
-		text := r.Text
-		if len(text) > 500 {
-			text = text[:500] + "..."
-		}
-		sb.WriteString("```\n")
-		sb.WriteString(text)
-		sb.WriteString("\n```\n")
+	var sb strings.Builder
 
-		// Show captures
-		if len(r.Captures) > 0 {
-			sb.WriteString("Captures: ")
-			first := true
-			for name, cap := range r.Captures {
-				if !first {
-					sb.WriteString(", ")
+	// Emit preamble only when verbose=true is explicitly passed (opt-in, default off).
+	wantVerbose := len(verbose) > 0 && verbose[0]
+	if wantVerbose {
+		sb.WriteString(fmt.Sprintf("Found %d match(es):\n", renderCount))
+	}
+
+	switch format {
+	case "compact":
+		for i := 0; i < renderCount; i++ {
+			r := results[i]
+			nodeType := "unknown"
+			if r.Node != nil {
+				nodeType = r.Node.Type()
+			}
+			firstLine := firstLineOf(r.Text, 80)
+			sb.WriteString(fmt.Sprintf("%s:%d (%s) %s\n", r.File, r.Location.Line, nodeType, firstLine))
+		}
+
+	case "location":
+		for i := 0; i < renderCount; i++ {
+			r := results[i]
+			sb.WriteString(fmt.Sprintf("%s:%d\n", r.File, r.Location.Line))
+		}
+
+	default: // "verbose"
+		for i := 0; i < renderCount; i++ {
+			r := results[i]
+			nodeType := "unknown"
+			if r.Node != nil {
+				nodeType = r.Node.Type()
+			}
+			sb.WriteString(fmt.Sprintf("**%s:%d** (%s)\n", r.File, r.Location.Line, nodeType))
+
+			// Truncate very long text
+			text := r.Text
+			if len(text) > 500 {
+				text = text[:500] + "..."
+			}
+			sb.WriteString("```\n")
+			sb.WriteString(text)
+			sb.WriteString("\n```\n")
+
+			// Show captures
+			if len(r.Captures) > 0 {
+				sb.WriteString("Captures: ")
+				first := true
+				for name, cap := range r.Captures {
+					if !first {
+						sb.WriteString(", ")
+					}
+					first = false
+					capText := cap.Text
+					if len(capText) > 50 {
+						capText = capText[:50] + "..."
+					}
+					sb.WriteString(fmt.Sprintf("$%s=%s", name, capText))
 				}
-				first = false
-				capText := cap.Text
-				if len(capText) > 50 {
-					capText = capText[:50] + "..."
-				}
-				sb.WriteString(fmt.Sprintf("$%s=%s", name, capText))
+				sb.WriteString("\n")
 			}
 			sb.WriteString("\n")
 		}
-		sb.WriteString("\n")
 	}
 
-	if truncated {
-		sb.WriteString(fmt.Sprintf("... and %d more matches (truncated)\n", len(results)-maxResults))
+	if remaining > 0 {
+		// Caller must embed the cursor token; we just append the remaining count hint.
+		// The actual [cursor: ...] line is written by the handler after calling MakeCursor.
+		sb.WriteString(fmt.Sprintf("[remaining: %d]\n", remaining))
 	}
 
 	return sb.String()
+}
+
+// firstLineOf returns the first non-empty line of s, trimmed and capped at maxLen chars.
+func firstLineOf(s string, maxLen int) string {
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if len(line) > maxLen {
+			return line[:maxLen-1] + "…"
+		}
+		return line
+	}
+	return ""
 }

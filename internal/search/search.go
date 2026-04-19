@@ -219,11 +219,9 @@ func (s *Searcher) buildArgs(req *Request) []string {
 		args = append(args, "--no-ignore")
 	}
 
-	// Global result cap — --max-total-count stops rg early across all files.
-	// Requires ripgrep >= 13.0. In-process truncation in parseOutput is kept as a safety net.
-	if req.MaxResults > 0 {
-		args = append(args, fmt.Sprintf("--max-total-count=%d", req.MaxResults))
-	}
+	// Result cap enforced in-process by parseOutput. rg has no cross-file
+	// total-count flag in stable releases, so we don't pass one; --max-count is
+	// per-file and would miss results unevenly.
 
 	// Add pattern
 	args = append(args, "--", req.Pattern)
@@ -356,8 +354,21 @@ func (s *Searcher) parseOutput(output *bytes.Buffer, maxResults int) (*SearchRes
 	return results, nil
 }
 
-// FormatResults formats search results for display.
+// FormatOptions controls how search results are rendered.
+type FormatOptions struct {
+	Cluster    bool   // coalesce consecutive matches into line-range blocks
+	CursorLine string // if non-empty, appended as a footer line
+	Verbose    bool   // if true, emit "Found N matches in M files:" preamble (opt-in)
+}
+
+// FormatResults formats search results for display (backward-compat wrapper).
 func (s *Searcher) FormatResults(results *SearchResults) string {
+	return s.FormatResultsWithOptions(results, FormatOptions{})
+}
+
+// FormatResultsWithOptions formats search results with configurable output.
+// By default the "Found N matches in M files:" preamble is omitted; set opts.Verbose=true to restore it.
+func (s *Searcher) FormatResultsWithOptions(results *SearchResults, opts FormatOptions) string {
 	if len(results.Results) == 0 {
 		return "No matches found."
 	}
@@ -374,14 +385,18 @@ func (s *Searcher) FormatResults(results *SearchResults) string {
 		fileResults[r.File] = append(fileResults[r.File], r)
 	}
 
-	// Write summary
-	totalMatches := len(results.Results)
-	fileCount := len(fileResults)
-	sb.WriteString(fmt.Sprintf("Found %d matches in %d files", totalMatches, fileCount))
-	if results.Truncated {
-		sb.WriteString(fmt.Sprintf(" (truncated, total: %d)", results.Total))
+	// Write preamble only when Verbose is requested.
+	if opts.Verbose {
+		totalMatches := len(results.Results)
+		fileCount := len(fileResults)
+		sb.WriteString(fmt.Sprintf("Found %d matches in %d files", totalMatches, fileCount))
+		if results.Truncated {
+			sb.WriteString(fmt.Sprintf(" (truncated, total: %d)", results.Total))
+		}
+		sb.WriteString(":\n\n")
+	} else if results.Truncated {
+		sb.WriteString(fmt.Sprintf("(truncated, showing subset of %d total matches)\n\n", results.Total))
 	}
-	sb.WriteString(":\n\n")
 
 	// Write results grouped by file
 	for _, file := range fileOrder {
@@ -395,24 +410,80 @@ func (s *Searcher) FormatResults(results *SearchResults) string {
 
 		sb.WriteString(fmt.Sprintf("**%s**\n", relPath))
 
-		for _, r := range fileResults[file] {
-			// Write context before
-			for _, ctx := range r.Context.Before {
-				sb.WriteString(fmt.Sprintf("   │ %s\n", truncateLine(ctx, 200)))
-			}
-
-			// Write match line
-			sb.WriteString(fmt.Sprintf("L%d│ %s\n", r.Line, truncateLine(r.MatchText, 200)))
-
-			// Write context after
-			for _, ctx := range r.Context.After {
-				sb.WriteString(fmt.Sprintf("   │ %s\n", truncateLine(ctx, 200)))
-			}
+		if opts.Cluster {
+			writeClusteredResults(&sb, fileResults[file])
+		} else {
+			writeVerboseResults(&sb, fileResults[file])
 		}
 		sb.WriteString("\n")
 	}
 
+	if opts.CursorLine != "" {
+		sb.WriteString(opts.CursorLine)
+		sb.WriteString("\n")
+	}
+
 	return sb.String()
+}
+
+// writeVerboseResults writes results in the standard verbose format.
+func writeVerboseResults(sb *strings.Builder, results []Result) {
+	for _, r := range results {
+		// Write context before
+		for _, ctx := range r.Context.Before {
+			fmt.Fprintf(sb, "   │ %s\n", truncateLine(ctx, 200))
+		}
+		// Write match line
+		fmt.Fprintf(sb, "L%d│ %s\n", r.Line, truncateLine(r.MatchText, 200))
+		// Write context after
+		for _, ctx := range r.Context.After {
+			fmt.Fprintf(sb, "   │ %s\n", truncateLine(ctx, 200))
+		}
+	}
+}
+
+// writeClusteredResults coalesces consecutive or adjacent match lines into
+// a single "L12-14│ <first-match-text>" entry. Context lines are dropped
+// in cluster mode to maximise information density.
+func writeClusteredResults(sb *strings.Builder, results []Result) {
+	if len(results) == 0 {
+		return
+	}
+
+	type clusterEntry struct {
+		startLine int
+		endLine   int
+		firstText string
+	}
+
+	var clusters []clusterEntry
+	cur := clusterEntry{
+		startLine: results[0].Line,
+		endLine:   results[0].Line,
+		firstText: results[0].MatchText,
+	}
+
+	for _, r := range results[1:] {
+		// Merge if adjacent (within 1 line gap)
+		if r.Line <= cur.endLine+1 {
+			if r.Line > cur.endLine {
+				cur.endLine = r.Line
+			}
+		} else {
+			clusters = append(clusters, cur)
+			cur = clusterEntry{startLine: r.Line, endLine: r.Line, firstText: r.MatchText}
+		}
+	}
+	clusters = append(clusters, cur)
+
+	for _, c := range clusters {
+		text := truncateLine(c.firstText, 200)
+		if c.startLine == c.endLine {
+			fmt.Fprintf(sb, "L%d│ %s\n", c.startLine, text)
+		} else {
+			fmt.Fprintf(sb, "L%d-%d│ %s\n", c.startLine, c.endLine, text)
+		}
+	}
 }
 
 // truncateLine truncates a line if it exceeds maxLen.

@@ -6,10 +6,12 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	xxhash "github.com/cespare/xxhash/v2"
+	"github.com/lukaszraczylo/mcp-filepuff/internal/cursor"
 	"github.com/lukaszraczylo/mcp-filepuff/internal/parser"
 	"github.com/lukaszraczylo/mcp-filepuff/internal/search"
 	"github.com/lukaszraczylo/mcp-filepuff/pkg/errors"
@@ -35,14 +37,63 @@ func (s *Server) handleFileSearch(ctx context.Context, request mcp.CallToolReque
 		return mcp.NewToolResultError("pattern is required"), nil
 	}
 
+	paths := request.GetStringSlice("paths", nil)
+	fileTypes := request.GetStringSlice("file_types", nil)
+	ignoreCase := request.GetBool("ignore_case", false)
+	regex := request.GetBool("regex", true)
+	contextLines := request.GetInt("context_lines", 2)
+
+	// Consult session prefs for max_results and cluster when not explicitly supplied.
+	prefs := s.sessionPrefs.Load()
+	var prefsMaxResults int
+	var prefsCluster *bool
+	if prefs != nil {
+		prefsMaxResults = prefs.DefaultMaxResults
+		prefsCluster = prefs.DefaultCluster
+	}
+	maxResults := effectiveInt(request, "max_results", prefsMaxResults, 0)
+	cluster := effectiveBool(request, "cluster", prefsCluster, false)
+
+	cursorStr := request.GetString("cursor", "")
+
+	// Compute query hash for cursor validation.
+	queryHash := cursor.HashParams(map[string]string{
+		"pattern":       pattern,
+		"paths":         strings.Join(paths, ","),
+		"file_types":    strings.Join(fileTypes, ","),
+		"ignore_case":   strconv.FormatBool(ignoreCase),
+		"regex":         strconv.FormatBool(regex),
+		"context_lines": strconv.Itoa(contextLines),
+	})
+
+	// Resolve cursor offset.
+	offset := 0
+	if cursorStr != "" {
+		off, hash, decErr := cursor.Decode(cursorStr)
+		if decErr != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("invalid cursor: %s", decErr)), nil
+		}
+		if hash != queryHash {
+			return mcp.NewToolResultError("cursor is for a different query, re-run without cursor"), nil
+		}
+		offset = off
+	}
+
+	// When paginating with a cursor, fetch all results (no rg-level cap) so we
+	// can apply the offset in-process. Without a cursor, let rg cap at maxResults.
+	rgMaxResults := maxResults
+	if offset > 0 {
+		rgMaxResults = 0 // fetch all, apply cap after skipping
+	}
+
 	req := &search.Request{
 		Pattern:      pattern,
-		Paths:        request.GetStringSlice("paths", nil),
-		FileTypes:    request.GetStringSlice("file_types", nil),
-		IgnoreCase:   request.GetBool("ignore_case", false),
-		Regex:        request.GetBool("regex", true),
-		ContextLines: request.GetInt("context_lines", 2),
-		MaxResults:   request.GetInt("max_results", 0),
+		Paths:        paths,
+		FileTypes:    fileTypes,
+		IgnoreCase:   ignoreCase,
+		Regex:        regex,
+		ContextLines: contextLines,
+		MaxResults:   rgMaxResults,
 	}
 
 	results, err := s.searcher.Search(ctx, req)
@@ -51,14 +102,64 @@ func (s *Server) handleFileSearch(ctx context.Context, request mcp.CallToolReque
 		return mcp.NewToolResultError(fmt.Sprintf("search error: %s", errors.SanitizeError(err))), nil
 	}
 
+	// Apply cursor offset.
+	if offset > 0 && offset < len(results.Results) {
+		results.Results = results.Results[offset:]
+		results.Truncated = false // will re-evaluate below
+	} else if offset > 0 {
+		results.Results = nil
+		results.Truncated = false
+	}
+
+	// Apply in-process max_results cap and compute cursor footer.
+	var cursorLine string
+	if maxResults > 0 && len(results.Results) > maxResults {
+		remaining := len(results.Results) - maxResults
+		results.Results = results.Results[:maxResults]
+		results.Truncated = true
+		nextOffset := offset + maxResults
+		nextCursor := cursor.Encode(nextOffset, queryHash)
+		cursorLine = fmt.Sprintf("[cursor: %s, remaining: %d]", nextCursor, remaining)
+	}
+
 	s.logger.Info("search completed",
 		"pattern", pattern,
 		"results_count", len(results.Results),
 		"truncated", results.Truncated,
 	)
 
-	output := s.searcher.FormatResults(results)
+	verbose := request.GetBool("verbose", false)
+	opts := search.FormatOptions{
+		Cluster:    cluster,
+		CursorLine: cursorLine,
+		Verbose:    verbose,
+	}
+	output := s.searcher.FormatResultsWithOptions(results, opts)
 	return mcp.NewToolResultText(output), nil
+}
+
+// effectiveInt returns the per-call value if the key is explicitly present in the
+// request arguments, otherwise falls back to sessionDefault (if > 0), then builtIn.
+func effectiveInt(request mcp.CallToolRequest, key string, sessionDefault, builtIn int) int {
+	if _, explicit := request.GetArguments()[key]; explicit {
+		return request.GetInt(key, builtIn)
+	}
+	if sessionDefault > 0 {
+		return sessionDefault
+	}
+	return builtIn
+}
+
+// effectiveBool returns the per-call value if the key is explicitly present in the
+// request arguments, otherwise falls back to sessionDefault (if non-nil), then builtIn.
+func effectiveBool(request mcp.CallToolRequest, key string, sessionDefault *bool, builtIn bool) bool {
+	if _, explicit := request.GetArguments()[key]; explicit {
+		return request.GetBool(key, builtIn)
+	}
+	if sessionDefault != nil {
+		return *sessionDefault
+	}
+	return builtIn
 }
 
 // handleFileRead handles the file_read tool.
@@ -70,9 +171,13 @@ func (s *Server) handleFileRead(ctx context.Context, request mcp.CallToolRequest
 		return mcp.NewToolResultError("request cancelled"), nil
 	}
 
-	// Batch mode: paths[] takes precedence over path
+	// Batch mode: paths[] takes precedence over path.
+	// NOTE: batch reads are always inlined — mixing dedup + resource_links is
+	// too complex and the savings are unclear for multi-file calls.
 	if paths := request.GetStringSlice("paths", nil); len(paths) > 0 {
 		var output strings.Builder
+		// Dedup: track etag -> first path that produced it.
+		seenEtag := make(map[string]string) // etag -> first path
 		for i, p := range paths {
 			if i > 0 {
 				output.WriteString("\n")
@@ -81,6 +186,16 @@ func (s *Server) handleFileRead(ctx context.Context, request mcp.CallToolRequest
 			if err != nil {
 				output.WriteString(fmt.Sprintf("--- %s ---\n[error: %s]\n", p, errors.SanitizeError(err)))
 				continue
+			}
+			// Extract etag from result footer for dedup check.
+			etag := extractEtag(result)
+			if etag != "" {
+				if firstPath, seen := seenEtag[etag]; seen {
+					// Duplicate content: emit pointer instead of full content.
+					output.WriteString(fmt.Sprintf("--- %s ---\n[duplicate of %s, etag: %s]\n", p, firstPath, etag))
+					continue
+				}
+				seenEtag[etag] = p
 			}
 			output.WriteString(fmt.Sprintf("--- %s ---\n%s", p, result))
 		}
@@ -96,59 +211,223 @@ func (s *Server) handleFileRead(ctx context.Context, request mcp.CallToolRequest
 	if err != nil {
 		return mcp.NewToolResultError(errors.SanitizeError(err)), nil
 	}
+
+	// Resource-link threshold check: for single-file reads, if the result
+	// exceeds the configured threshold, return a ResourceLink instead of
+	// inlining the content. The client can fetch the resource on demand.
+	// Bypassed when:
+	//   - force_inline=true
+	//   - max_inline_bytes is set and result fits within it
+	//   - threshold is 0 (disabled)
+	//   - result is already small (skeleton/symbols_only/line-range paths
+	//     produce small output; threshold is on result bytes, not file bytes)
+	// Determine resource-link threshold: session pref overrides cfg, per-call overrides session.
+	threshold := s.cfg.ResourceLinkThresholdBytes
+	if sp := s.sessionPrefs.Load(); sp != nil && sp.ResourceLinkThreshold > 0 {
+		threshold = sp.ResourceLinkThreshold
+	}
+	forceInline := request.GetBool("force_inline", false)
+	maxInlineBytes := request.GetInt("max_inline_bytes", 0)
+	if maxInlineBytes > 0 {
+		threshold = maxInlineBytes
+	}
+
+	if !forceInline && threshold > 0 && len(result) > threshold {
+		etag := extractEtag(result)
+		uri := buildReadResourceURI(path, etag)
+		lineCount := strings.Count(result, "\n")
+		desc := fmt.Sprintf("etag=%s, size=%d bytes, lines=%d", etag, len(result), lineCount)
+		mimeType := detectMIMEType(path)
+		link := mcp.NewResourceLink(uri, path, desc, mimeType)
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{link},
+		}, nil
+	}
+
 	return mcp.NewToolResultText(result), nil
 }
 
-// readOneFile reads a single file applying all formatting options from the request.
-func (s *Server) readOneFile(ctx context.Context, request mcp.CallToolRequest, path string) (string, error) {
+// buildReadResourceURI constructs the filepuff://read URI for a file + etag pair.
+func buildReadResourceURI(path, etag string) string {
+	if etag == "" {
+		return "filepuff://read/" + path
+	}
+	return "filepuff://read/" + path + "?etag=" + etag
+}
+
+// detectMIMEType returns a best-effort MIME type for the given file path.
+func detectMIMEType(path string) string {
+	ext := strings.ToLower(path)
+	switch {
+	case strings.HasSuffix(ext, ".go"):
+		return "text/x-go"
+	case strings.HasSuffix(ext, ".ts"), strings.HasSuffix(ext, ".tsx"):
+		return "text/typescript"
+	case strings.HasSuffix(ext, ".js"), strings.HasSuffix(ext, ".jsx"):
+		return "text/javascript"
+	case strings.HasSuffix(ext, ".py"):
+		return "text/x-python"
+	case strings.HasSuffix(ext, ".rs"):
+		return "text/x-rust"
+	case strings.HasSuffix(ext, ".md"):
+		return "text/markdown"
+	case strings.HasSuffix(ext, ".json"):
+		return "application/json"
+	case strings.HasSuffix(ext, ".yaml"), strings.HasSuffix(ext, ".yml"):
+		return "text/yaml"
+	case strings.HasSuffix(ext, ".toml"):
+		return "text/toml"
+	case strings.HasSuffix(ext, ".html"), strings.HasSuffix(ext, ".htm"):
+		return "text/html"
+	case strings.HasSuffix(ext, ".css"):
+		return "text/css"
+	case strings.HasSuffix(ext, ".sh"):
+		return "text/x-sh"
+	case strings.HasSuffix(ext, ".c"), strings.HasSuffix(ext, ".h"):
+		return "text/x-c"
+	case strings.HasSuffix(ext, ".cpp"), strings.HasSuffix(ext, ".cc"), strings.HasSuffix(ext, ".cxx"):
+		return "text/x-c++"
+	default:
+		return "text/plain"
+	}
+}
+
+// lineNumberOpts holds resolved line-numbering preferences for readOneFile.
+type lineNumberOpts struct {
+	noLineNumbers   bool
+	compactLineNums bool
+	lineInterval    int
+}
+
+// resolveLineNumberOpts resolves per-call vs session-pref line-number options.
+func (s *Server) resolveLineNumberOpts(request mcp.CallToolRequest) lineNumberOpts {
+	opts := lineNumberOpts{
+		noLineNumbers:   request.GetBool("no_line_numbers", false),
+		lineInterval:    request.GetInt("line_number_interval", 1),
+		compactLineNums: request.GetBool("compact_line_numbers", false),
+	}
+
+	// Apply session line_numbers pref when no explicit per-call override was supplied.
+	if sp := s.sessionPrefs.Load(); sp != nil && sp.LineNumbers != "" {
+		_, hasNoLN := request.GetArguments()["no_line_numbers"]
+		_, hasCompact := request.GetArguments()["compact_line_numbers"]
+		_, hasInterval := request.GetArguments()["line_number_interval"]
+		if !hasNoLN && !hasCompact && !hasInterval {
+			switch sp.LineNumbers {
+			case "none":
+				opts.noLineNumbers = true
+				opts.compactLineNums = false
+			case "compact":
+				opts.noLineNumbers = false
+				opts.compactLineNums = true
+			case "full":
+				opts.noLineNumbers = false
+				opts.compactLineNums = false
+			}
+		}
+	}
+
+	if opts.lineInterval == 0 {
+		opts.noLineNumbers = true
+	}
+	return opts
+}
+
+// applyStrip applies strip flags to the selected line range and returns the
+// possibly-rewritten lines, new bounds, and a stripped-footer annotation.
+func applyStrip(lines []string, lineStart, lineEnd int, stripFlags []parser.StripFlag, path string) (newLines []string, newStart, newEnd int, footer string) {
+	if len(stripFlags) == 0 {
+		return lines, lineStart, lineEnd, ""
+	}
+	selectedContent := strings.Join(lines[lineStart-1:lineEnd], "\n")
+	lang := protocol.DetectLanguage(path)
+	stripped := parser.StripContent(selectedContent, stripFlags, lang)
+	if len(stripped.Stripped) > 0 {
+		names := make([]string, len(stripped.Stripped))
+		for i, f := range stripped.Stripped {
+			names[i] = string(f)
+		}
+		footer = "[stripped: " + strings.Join(names, ", ") + "]\n"
+	}
+	newLines = splitLines(stripped.Content)
+	return newLines, 1, len(newLines), footer
+}
+
+// loadFileForRead performs workspace, stat, size, and read checks for a path.
+func (s *Server) loadFileForRead(path string) ([]byte, error) {
 	if !s.cfg.IsPathAllowed(path) {
-		return "", fmt.Errorf("path is outside workspace root")
+		return nil, fmt.Errorf("path is outside workspace root")
 	}
 
 	info, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return "", fmt.Errorf("file not found: %s", path)
+			return nil, fmt.Errorf("file not found: %s", path)
 		}
 		if os.IsPermission(err) {
-			return "", fmt.Errorf("permission denied: %s", path)
+			return nil, fmt.Errorf("permission denied: %s", path)
 		}
 		s.logger.Warn("file stat error", "path", path, "error", err)
-		return "", fmt.Errorf("error accessing file")
+		return nil, fmt.Errorf("error accessing file")
 	}
 	if info.Size() > s.cfg.MaxFileSize {
-		return "", fmt.Errorf("file too large (%d bytes, max %d)", info.Size(), s.cfg.MaxFileSize)
+		return nil, fmt.Errorf("file too large (%d bytes, max %d)", info.Size(), s.cfg.MaxFileSize)
 	}
 
 	content, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsPermission(err) {
-			return "", fmt.Errorf("permission denied: %s", path)
+			return nil, fmt.Errorf("permission denied: %s", path)
 		}
 		s.logger.Warn("file read error", "path", path, "error", err)
-		return "", fmt.Errorf("error reading file")
+		return nil, fmt.Errorf("error reading file")
+	}
+	return content, nil
+}
+
+// readOneFile reads a single file applying all formatting options from the request.
+func (s *Server) readOneFile(ctx context.Context, request mcp.CallToolRequest, path string) (string, error) {
+	content, err := s.loadFileForRead(path)
+	if err != nil {
+		return "", err
 	}
 
-	// Compute etag from content hash
-	etag := fmt.Sprintf("%016x", xxhash.Sum64(content))
+	// Feature 3: short etag — 8 hex chars (32-bit).
+	// Accept previous_etag by prefix match so old 16-char etags keep working.
+	fullHash := fmt.Sprintf("%016x", xxhash.Sum64(content))
+	etag := fullHash[:8]
 
-	// Short-circuit if caller has the current version
-	if prev := request.GetString("previous_etag", ""); prev != "" && prev == etag {
-		return fmt.Sprintf("[unchanged, etag: %s]\n", etag), nil
+	if prev := request.GetString("previous_etag", ""); prev != "" {
+		// Match: exact 8-char match, old client sent full 16-char etag, or new client sent 8-char prefix of old.
+		if prev == etag || strings.HasPrefix(fullHash, prev) || strings.HasPrefix(prev, etag) {
+			return fmt.Sprintf("[unchanged, etag: %s]\n", etag), nil
+		}
 	}
 
 	// Parse request options
 	includeAST := request.GetBool("include_ast", false)
 	symbolsOnly := request.GetBool("symbols_only", false)
 	symbolName := request.GetString("symbol_name", "")
-	noLineNumbers := request.GetBool("no_line_numbers", false)
-	lineInterval := request.GetInt("line_number_interval", 1)
 	collapseBlank := request.GetBool("collapse_blank_lines", false)
 	maxLines := request.GetInt("max_lines", 0)
 
-	if lineInterval == 0 {
-		noLineNumbers = true
+	lnOpts := s.resolveLineNumberOpts(request)
+
+	// Feature 1: mode flag — "full" (default) | "skeleton" | "symbols_only".
+	// symbols_only mode is an alias for include_ast+symbols_only.
+	mode := request.GetString("mode", "full")
+	if mode == "symbols_only" {
+		symbolsOnly = true
+		includeAST = true
 	}
+
+	// Feature 2: strip — remove selected content classes before line-numbering.
+	stripRaw := request.GetStringSlice("strip", nil)
+	var stripFlags []parser.StripFlag
+	for _, sf := range stripRaw {
+		stripFlags = append(stripFlags, parser.StripFlag(sf))
+	}
+
 	if symbolsOnly && !includeAST {
 		return "", fmt.Errorf("symbols_only requires include_ast=true")
 	}
@@ -157,7 +436,7 @@ func (s *Server) readOneFile(ctx context.Context, request mcp.CallToolRequest, p
 	lineStart := request.GetInt("line_start", 1)
 	lineEnd := request.GetInt("line_end", len(lines))
 
-	// Symbol-based line range: find the symbol and use its exact bounds
+	// Symbol-based line range: find the symbol and use its exact bounds.
 	if symbolName != "" {
 		symbolKind := protocol.SymbolKind(request.GetString("symbol_kind", ""))
 		start, end, found := s.resolveSymbolLines(ctx, path, content, symbolName, symbolKind)
@@ -168,7 +447,7 @@ func (s *Server) readOneFile(ctx context.Context, request mcp.CallToolRequest, p
 		lineEnd = end
 	}
 
-	// Clamp to valid range
+	// Clamp to valid range.
 	if lineStart < 1 {
 		lineStart = 1
 	}
@@ -181,6 +460,19 @@ func (s *Server) readOneFile(ctx context.Context, request mcp.CallToolRequest, p
 
 	var output strings.Builder
 
+	// Feature 1: skeleton mode — replace function bodies with { ... }.
+	if mode == "skeleton" {
+		skText, _, skErr := parser.SkeletonFile(ctx, s.parser, path, content)
+		if skErr != nil {
+			// Fall back to full mode on parse error.
+			s.logger.Warn("skeleton mode failed, falling back to full", "path", path, "error", skErr)
+		} else {
+			output.WriteString(skText)
+			fmt.Fprintf(&output, "[etag: %s]\n", etag)
+			return output.String(), nil
+		}
+	}
+
 	if includeAST {
 		if summary := s.generateASTSummary(ctx, path, content); summary != "" {
 			output.WriteString(summary)
@@ -191,13 +483,19 @@ func (s *Server) readOneFile(ctx context.Context, request mcp.CallToolRequest, p
 	}
 
 	if symbolsOnly {
-		output.WriteString(fmt.Sprintf("[etag: %s]\n", etag))
+		fmt.Fprintf(&output, "[etag: %s]\n", etag)
 		return output.String(), nil
 	}
 
-	writeLines(&output, lines, lineStart, lineEnd, maxLines, noLineNumbers, lineInterval, collapseBlank)
+	// Feature 2: apply strip AFTER line-range selection, BEFORE line numbering.
+	lines, lineStart, lineEnd, strippedFooter := applyStrip(lines, lineStart, lineEnd, stripFlags, path)
 
-	output.WriteString(fmt.Sprintf("[etag: %s]\n", etag))
+	writeLines(&output, lines, lineStart, lineEnd, maxLines, lnOpts.noLineNumbers, lnOpts.lineInterval, collapseBlank, lnOpts.compactLineNums)
+
+	if strippedFooter != "" {
+		output.WriteString(strippedFooter)
+	}
+	fmt.Fprintf(&output, "[etag: %s]\n", etag)
 	return output.String(), nil
 }
 
@@ -212,7 +510,8 @@ func (s *Server) resolveSymbolLines(ctx context.Context, path string, content []
 }
 
 // writeLines writes the selected line range into output, applying all formatting options.
-func writeLines(output *strings.Builder, lines []string, lineStart, lineEnd, maxLines int, noLineNumbers bool, lineInterval int, collapseBlank bool) {
+// compactLineNums=true emits "12│" instead of "  12│ " (no padding, no trailing space).
+func writeLines(output *strings.Builder, lines []string, lineStart, lineEnd, maxLines int, noLineNumbers bool, lineInterval int, collapseBlank bool, compactLineNums bool) {
 	effectiveEnd := lineEnd
 	truncatedCount := 0
 	if maxLines > 0 && (lineEnd-lineStart+1) > maxLines {
@@ -233,6 +532,13 @@ func writeLines(output *strings.Builder, lines []string, lineStart, lineEnd, max
 		switch {
 		case noLineNumbers:
 			output.WriteString(line + "\n")
+		case compactLineNums:
+			// Feature 4: compact prefix — "12│content"
+			if lineInterval <= 1 || lineNum%lineInterval == 0 || i == lineStart-1 || i == effectiveEnd-1 {
+				fmt.Fprintf(output, "%d│%s\n", lineNum, line)
+			} else {
+				fmt.Fprintf(output, "│%s\n", line)
+			}
 		case lineInterval <= 1 || lineNum%lineInterval == 0 || i == lineStart-1 || i == effectiveEnd-1:
 			fmt.Fprintf(output, "%4d│ %s\n", lineNum, line)
 		default:
@@ -243,6 +549,23 @@ func writeLines(output *strings.Builder, lines []string, lineStart, lineEnd, max
 	if truncatedCount > 0 {
 		fmt.Fprintf(output, "\n[... %d more lines omitted. Use line_start/line_end or increase max_lines to see more]\n", truncatedCount)
 	}
+}
+
+// extractEtag extracts the etag value from a readOneFile result string.
+// Returns empty string if not found.
+func extractEtag(result string) string {
+	// Look for "[etag: XXXXXXXX]" at end of result.
+	const prefix = "[etag: "
+	idx := strings.LastIndex(result, prefix)
+	if idx < 0 {
+		return ""
+	}
+	rest := result[idx+len(prefix):]
+	close := strings.Index(rest, "]")
+	if close < 0 {
+		return ""
+	}
+	return rest[:close]
 }
 
 // splitLines splits a string into lines.

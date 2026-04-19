@@ -43,23 +43,7 @@ func Hello() string {
 
 	ctx := context.Background()
 
-	// Test 1: Ping tool (health check)
-	t.Run("ping", func(t *testing.T) {
-		req := mcp.CallToolRequest{}
-		result, err := srv.handlePing(ctx, req)
-		if err != nil {
-			t.Errorf("handlePing() error = %v", err)
-		}
-		if result == nil {
-			t.Fatal("handlePing() returned nil")
-			return
-		}
-		if len(result.Content) == 0 {
-			t.Fatal("handlePing() returned empty content")
-		}
-	})
-
-	// Test 2: File read
+	// Test: File read (ping removed — Change 3)
 	t.Run("file_read", func(t *testing.T) {
 		req := mcp.CallToolRequest{}
 		req.Params.Arguments = map[string]interface{}{
@@ -144,14 +128,8 @@ func TestMCPToolDiscovery(t *testing.T) {
 		t.Fatal("MCP server not initialized")
 	}
 
-	// Verify each expected tool works
-	ctx := context.Background()
-
-	// Test ping tool
-	pingReq := mcp.CallToolRequest{}
-	if _, err := srv.handlePing(ctx, pingReq); err != nil {
-		t.Errorf("ping tool failed: %v", err)
-	}
+	// Ping tool removed (Change 3 — MCP protocol has own liveness check).
+	// Tools verified via integration tests in TestIntegrationFileOperations.
 }
 
 // TestMCPErrorResponses tests error handling following MCP spec.
