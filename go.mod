@@ -6,7 +6,7 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/goccy/go-json v0.10.6
 	github.com/hashicorp/golang-lru/v2 v2.0.7
-	github.com/lukaszraczylo/oss-telemetry v0.0.0-20260521005811-e02d51419c52
+	github.com/lukaszraczylo/oss-telemetry v0.1.7
 	github.com/mark3labs/mcp-go v0.54.0
 	github.com/sergi/go-diff v1.4.0
 	github.com/smacker/go-tree-sitter v0.0.0-20240827094217-dd81d9e9be82
