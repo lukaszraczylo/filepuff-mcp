@@ -844,6 +844,19 @@ Use the `ping` tool to verify the server is running correctly:
 
 Expected response: `"pong"`
 
+## Telemetry
+
+On startup this MCP server sends a single anonymous adoption ping — project
+name, version, timestamp; no identifiers, no tool call data, no file
+contents. Fire-and-forget with a 2-second timeout; cannot block startup
+or panic.
+
+See **[oss-telemetry — Disabling telemetry](https://github.com/lukaszraczylo/oss-telemetry#disabling-telemetry)**
+for the exact wire format, source, and full opt-out documentation.
+
+Quick opt-out: set any of `DO_NOT_TRACK=1`, `OSS_TELEMETRY_DISABLED=1`,
+or `MCP_FILEPUFF_DISABLE_TELEMETRY=1`.
+
 ## License
 
 MIT License
