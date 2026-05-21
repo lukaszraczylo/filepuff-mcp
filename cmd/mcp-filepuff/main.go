@@ -9,9 +9,16 @@ import (
 
 	"github.com/lukaszraczylo/mcp-filepuff/internal/config"
 	"github.com/lukaszraczylo/mcp-filepuff/internal/server"
+	telemetry "github.com/lukaszraczylo/oss-telemetry"
 )
 
+// version is the build version. Set via goreleaser ldflags
+// (-X main.version={{.Version}}).
+var version = "dev"
+
 func main() {
+	telemetry.Send("mcp-filepuff", version)
+
 	// Parse command line flags
 	var (
 		workspaceRoot = flag.String("workspace", "", "Workspace root directory (default: current directory)")
