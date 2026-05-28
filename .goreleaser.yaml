@@ -5,6 +5,15 @@ version: 2
 
 project_name: mcp-filepuff
 
+# Split CGO builds by full target (GOOS+GOARCH), not just GOOS.
+# Each release matrix runner builds natively for exactly one target via the
+# GGOOS/GGOARCH filters set in workflow-prepare.sh. Without `by: target` the
+# split partitions by GOOS only, so a single linux runner would try to build
+# both amd64 and arm64 — and native gcc cannot assemble the other arch's CGO
+# runtime (gcc_arm64.S errors), breaking the release.
+partial:
+  by: target
+
 before:
   hooks:
     - go mod tidy
