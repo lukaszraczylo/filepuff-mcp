@@ -353,43 +353,6 @@ func Hello() {
 	}
 }
 
-func TestDetectIndentation(t *testing.T) {
-	tests := []struct {
-		name    string
-		content string
-		want    string
-		pos     int
-	}{
-		{
-			name:    "no indent",
-			content: "func main() {}",
-			pos:     0,
-			want:    "",
-		},
-		{
-			name:    "tab indent",
-			content: "func main() {\n\tprintln(\"hello\")\n}",
-			pos:     15,
-			want:    "\t",
-		},
-		{
-			name:    "space indent",
-			content: "func main() {\n    println(\"hello\")\n}",
-			pos:     18,
-			want:    "    ",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := detectIndentation([]byte(tt.content), tt.pos)
-			if got != tt.want {
-				t.Errorf("detectIndentation() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestGenerateDiff(t *testing.T) {
 	original := "line1\nline2\nline3"
 	modified := "line1\nmodified\nline3"

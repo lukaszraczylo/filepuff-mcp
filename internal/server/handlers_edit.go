@@ -11,16 +11,6 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
-// unescapeNewlines converts literal \n, \t, \" sequences to actual characters.
-// This handles cases where MCP clients send double-escaped JSON strings.
-func unescapeNewlines(s string) string {
-	s = strings.ReplaceAll(s, "\\n", "\n")
-	s = strings.ReplaceAll(s, "\\t", "\t")
-	s = strings.ReplaceAll(s, "\\\"", "\"")
-	s = strings.ReplaceAll(s, "\\\\", "\\")
-	return s
-}
-
 // handleEditApply handles the edit_apply tool.
 func (s *Server) handleEditApply(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return s.handleEdit(ctx, request)
@@ -51,8 +41,12 @@ func (s *Server) handleEdit(ctx context.Context, request mcp.CallToolRequest) (*
 		return mcp.NewToolResultError("file is outside workspace root"), nil
 	}
 
+	// new_content arrives already fully decoded by the JSON-RPC layer (mcp-go):
+	// JSON escapes such as \n, \t, \\, \" have been resolved to their real bytes.
+	// It must therefore be used verbatim — any further unescaping would corrupt
+	// legitimate backslash sequences in source code (string literals, regexes,
+	// Windows paths). See TestEditApplyPreservesBackslashSequences*.
 	newContent := request.GetString("new_content", "")
-	newContent = unescapeNewlines(newContent)
 
 	selectorName := request.GetString("selector_name", "")
 
@@ -114,21 +108,26 @@ func (s *Server) handleEdit(ctx context.Context, request mcp.CallToolRequest) (*
 	}
 }
 
-// countDiffLines counts added (+) and removed (-) lines in a unified diff string.
+// countDiffLines counts added (+) and removed (-) content lines in a unified diff.
+// Only lines inside hunks are counted (everything after the first "@@" header), so the
+// "---"/"+++" file headers are skipped structurally — and content whose own text starts
+// with + or - is counted correctly rather than mistaken for a header. The git-style
+// "\ No newline at end of file" marker is ignored.
 func countDiffLines(diff string) (added, removed int) {
+	inHunk := false
 	for _, line := range strings.Split(diff, "\n") {
-		if len(line) == 0 {
+		if strings.HasPrefix(line, "@@") {
+			inHunk = true
+			continue
+		}
+		if !inHunk || line == "" {
 			continue
 		}
 		switch line[0] {
 		case '+':
-			if !strings.HasPrefix(line, "+++") {
-				added++
-			}
+			added++
 		case '-':
-			if !strings.HasPrefix(line, "---") {
-				removed++
-			}
+			removed++
 		}
 	}
 	return

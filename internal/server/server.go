@@ -313,7 +313,7 @@ func (s *Server) registerTools() {
 				mcp.Description("Edit operation: replace, insert_before, insert_after, delete"),
 			),
 			mcp.WithString("new_content",
-				mcp.Description("New content (required for replace/insert operations)"),
+				mcp.Description("New content (required for replace/insert operations). Inserted verbatim: send it as normal JSON (real newlines, quotes JSON-escaped as usual). The server does NOT re-interpret escape sequences, so backslash sequences in source code (e.g. \\n, \\t, \\\\ inside string literals, regexes, or Windows paths) are preserved exactly. Indentation is not auto-applied — include the leading whitespace you want. Line endings are normalized to the file's existing convention (LF or CRLF)."),
 			),
 			// AST-mode selectors (for code files)
 			mcp.WithString("selector_kind",

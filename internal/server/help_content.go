@@ -137,6 +137,8 @@ const helpEditApply = "# edit_apply — flags and examples\n\n" +
 	"| `none` | Empty response (silent success) |\n\n" +
 	"`compact_response=true` is a deprecated alias for `response=\"count\"` kept for pre-v2 compatibility.\n\n" +
 	"For code files (Go, TypeScript, JavaScript, Python, C, C++, Rust) syntax is validated before writing — the edit is rejected if it would produce invalid syntax.\n\n" +
+	"## new_content handling\n\n" +
+	"`new_content` is inserted **verbatim**. Send it as normal JSON — real newlines (or JSON `\\n`), with quotes JSON-escaped as usual. The server does not re-interpret escape sequences, so literal backslash sequences in source (`\\n`, `\\t`, `\\\\`, regexes, Windows paths) are written exactly as given. Indentation is not auto-applied — include the leading whitespace you want. Line endings are normalized to the file's existing convention (LF or CRLF).\n\n" +
 	"## Selector types\n\n" +
 	"### AST-mode selectors (code files)\n" +
 	"- `selector_kind` — AST node type (e.g. `function_declaration`, `class_declaration`)\n" +

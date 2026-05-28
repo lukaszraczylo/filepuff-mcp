@@ -481,98 +481,104 @@ func (e *Engine) matchesSelector(sel ASTSelector, n *sitter.Node, content []byte
 	return true
 }
 
-// applyEdit applies the edit operation to the content.
-// AST mode uses exact byte positions — new_content is inserted verbatim without auto-indentation.
+// applyEdit applies an AST-mode edit. new_content is inserted verbatim — the caller
+// controls indentation — and only line endings are normalized to the file's convention.
 func (e *Engine) applyEdit(edit *ASTEdit, node *sitter.Node, content []byte) ([]byte, error) {
-	startByte := node.StartByte()
-	endByte := node.EndByte()
+	eol := detectLineEnding(content)
+	newContent := normalizeLineEndings(edit.NewContent, eol)
+	return spliceContent(edit.Operation, content, int(node.StartByte()), int(node.EndByte()), newContent, eol)
+}
 
-	newContent := edit.NewContent
+// detectLineEnding reports the file's dominant line-ending convention: "\r\n" when any
+// CRLF terminator is present, otherwise "\n".
+func detectLineEnding(content []byte) string {
+	if bytes.Contains(content, []byte("\r\n")) {
+		return "\r\n"
+	}
+	return "\n"
+}
+
+// normalizeLineEndings rewrites every line ending in s to eol. It first collapses CRLF to
+// LF, then expands to the target, so mixed input becomes uniform and new_content can never
+// introduce a line ending foreign to the file being edited.
+func normalizeLineEndings(s, eol string) string {
+	if s == "" {
+		return s
+	}
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	if eol != "\n" {
+		s = strings.ReplaceAll(s, "\n", eol)
+	}
+	return s
+}
+
+func endsWithNewline(s string) bool { return strings.HasSuffix(s, "\n") }
+
+func startsWithNewline(s string) bool {
+	return s != "" && (s[0] == '\n' || s[0] == '\r')
+}
+
+// spliceContent applies an edit operation by splicing newContent into content over the
+// byte range [start, end). It is shared by AST and text modes — once auto-indentation is
+// removed the two are identical. Restored terminators and separators use eol so the
+// file's line-ending convention is preserved.
+func spliceContent(op EditOperation, content []byte, start, end int, newContent, eol string) ([]byte, error) {
+	// A line-based selection on a CRLF file can land `end` between the \r (treated as
+	// line content) and the \n of a terminator. Pull it back so the full \r\n stays
+	// intact in the tail and is never split into a bare LF.
+	if end > start && end < len(content) && content[end-1] == '\r' && content[end] == '\n' {
+		end--
+	}
 
 	var result []byte
-
-	switch edit.Operation {
+	switch op {
 	case EditReplace:
-		result = append(result, content[:startByte]...)
-		result = append(result, []byte(newContent)...)
-		// Preserve trailing newline: if selection ended with \n but replacement doesn't,
-		// re-add it to prevent line merging
-		if endByte > startByte && content[endByte-1] == '\n' && !strings.HasSuffix(newContent, "\n") {
-			result = append(result, '\n')
+		result = append(result, content[:start]...)
+		result = append(result, newContent...)
+		// Restore a line terminator if the replaced range ended with one but the
+		// replacement does not, to prevent merging with the following line.
+		if end > start && content[end-1] == '\n' && !endsWithNewline(newContent) {
+			result = append(result, eol...)
 		}
-		result = append(result, content[endByte:]...)
+		result = append(result, content[end:]...)
 
 	case EditInsertBefore:
 		insertion := newContent
-		if !strings.HasSuffix(insertion, "\n") {
-			insertion += "\n"
+		if !endsWithNewline(insertion) {
+			insertion += eol
 		}
-		result = append(result, content[:startByte]...)
-		result = append(result, []byte(insertion)...)
-		result = append(result, content[startByte:]...)
+		result = append(result, content[:start]...)
+		result = append(result, insertion...)
+		result = append(result, content[start:]...)
 
 	case EditInsertAfter:
 		insertion := newContent
-		// Ensure separation from preceding content
-		if endByte > 0 && content[endByte-1] != '\n' && !strings.HasPrefix(insertion, "\n") {
-			insertion = "\n" + insertion
+		// Separate from preceding content.
+		if end > 0 && content[end-1] != '\n' && !startsWithNewline(insertion) {
+			insertion = eol + insertion
 		}
-		// Ensure separation from following content
-		if !strings.HasSuffix(insertion, "\n") && endByte < uint32(len(content)) && content[endByte] != '\n' {
-			insertion += "\n"
+		// Separate from following content.
+		if !endsWithNewline(insertion) && end < len(content) && content[end] != '\n' {
+			insertion += eol
 		}
-		result = append(result, content[:endByte]...)
-		result = append(result, []byte(insertion)...)
-		result = append(result, content[endByte:]...)
+		result = append(result, content[:end]...)
+		result = append(result, insertion...)
+		result = append(result, content[end:]...)
 
 	case EditDelete:
-		result = append(result, content[:startByte]...)
-		result = append(result, content[endByte:]...)
+		result = append(result, content[:start]...)
+		result = append(result, content[end:]...)
 
 	default:
-		return nil, errors.NewInvalidEditError(fmt.Sprintf("unknown operation: %s", edit.Operation))
+		return nil, errors.NewInvalidEditError(fmt.Sprintf("unknown operation: %s", op))
 	}
 
 	return result, nil
 }
 
-// detectIndentation detects the indentation at a given byte position.
-func detectIndentation(content []byte, bytePos int) string {
-	// Find the start of the line
-	lineStart := bytePos
-	for lineStart > 0 && content[lineStart-1] != '\n' {
-		lineStart--
-	}
-
-	// Extract leading whitespace
-	var indent strings.Builder
-	for i := lineStart; i < bytePos && i < len(content); i++ {
-		c := content[i]
-		if c == ' ' || c == '\t' {
-			indent.WriteByte(c)
-		} else {
-			break
-		}
-	}
-
-	return indent.String()
-}
-
-// indentContent applies indentation to multi-line content.
-func indentContent(content string, indent string) string {
-	if indent == "" {
-		return content
-	}
-
-	lines := strings.Split(content, "\n")
-	for i, line := range lines {
-		if i > 0 && line != "" {
-			lines[i] = indent + line
-		}
-	}
-
-	return strings.Join(lines, "\n")
-}
+// noNewlineMarker is the git-style annotation emitted after a diff line whose source
+// version has no trailing newline.
+const noNewlineMarker = "\\ No newline at end of file\n"
 
 // diffLine represents a single line in the diff with its type and content.
 type diffLine struct {
@@ -582,32 +588,56 @@ type diffLine struct {
 	newN int    // 1-based line number in modified (0 if delete)
 }
 
+// indexRange is an inclusive [start, end] range of diffLine indices forming one hunk.
+type indexRange struct{ start, end int }
+
 // generateDiff creates a unified diff between original and modified content.
-// Uses line-level Myers diff algorithm and outputs a proper unified diff
-// with context lines (3 before/after each change, merging close hunks).
+// Uses a line-level Myers diff and outputs a unified diff with 3 lines of context
+// before/after each change, merging close hunks.
 func (e *Engine) generateDiff(original, modified, filename string) string {
 	dmp := e.dmp
 
-	// Use line-level diffing: encode each line as a single character,
-	// diff the encoded strings, then decode back to real lines.
+	// Line-level diffing: encode each line as a single rune, diff the encoded strings,
+	// then decode back to real lines.
 	chars1, chars2, lineArray := dmp.DiffLinesToChars(original, modified)
-	diffs := dmp.DiffMain(chars1, chars2, false)
-	diffs = dmp.DiffCharsToLines(diffs, lineArray)
-
-	// Cleanup for readability
+	diffs := dmp.DiffCharsToLines(dmp.DiffMain(chars1, chars2, false), lineArray)
 	diffs = dmp.DiffCleanupSemantic(diffs)
 
-	// Flatten diffs into individual lines with line numbers
-	var lines []diffLine
-	oldLine := 1
-	newLine := 1
+	// Track whether each version lacks a final newline, so the diff is annotated
+	// git-style ("\ No newline at end of file") instead of implying a phantom one.
+	origNoEOL := len(original) > 0 && !strings.HasSuffix(original, "\n")
+	modNoEOL := len(modified) > 0 && !strings.HasSuffix(modified, "\n")
+
+	lines, maxOldN, maxNewN := flattenDiffLines(diffs)
+
+	ranges := diffHunkRanges(lines)
+	if len(ranges) == 0 {
+		return "" // no changes
+	}
+
+	var buf bytes.Buffer
+	fmt.Fprintf(&buf, "--- %s\n", filename)
+	fmt.Fprintf(&buf, "+++ %s\n", filename)
+	for _, r := range ranges {
+		oldStart, oldCount, newStart, newCount := hunkBounds(lines, r.start, r.end)
+		fmt.Fprintf(&buf, "@@ -%d,%d +%d,%d @@\n", oldStart, oldCount, newStart, newCount)
+		writeDiffBody(&buf, lines, r.start, r.end, origNoEOL, modNoEOL, maxOldN, maxNewN)
+	}
+	return buf.String()
+}
+
+// flattenDiffLines expands diff segments into per-line records with 1-based line numbers,
+// returning the lines plus the final line number of each version (for no-newline marking).
+func flattenDiffLines(diffs []diffmatchpatch.Diff) (lines []diffLine, maxOldN, maxNewN int) {
+	oldLine, newLine := 1, 1
 	for _, d := range diffs {
-		rawLines := strings.SplitAfter(d.Text, "\n")
-		for _, raw := range rawLines {
+		for _, raw := range strings.SplitAfter(d.Text, "\n") {
 			if raw == "" {
 				continue
 			}
-			text := strings.TrimSuffix(raw, "\n")
+			// Strip the terminator for display; also drop a trailing CR so CRLF files
+			// do not leak raw carriage returns into the rendered diff.
+			text := strings.TrimSuffix(strings.TrimSuffix(raw, "\n"), "\r")
 			switch d.Type {
 			case diffmatchpatch.DiffEqual:
 				lines = append(lines, diffLine{op: d.Type, text: text, oldN: oldLine, newN: newLine})
@@ -622,97 +652,88 @@ func (e *Engine) generateDiff(original, modified, filename string) string {
 			}
 		}
 	}
+	return lines, oldLine - 1, newLine - 1
+}
 
-	// Identify indices of changed lines
+// diffHunkRanges returns the inclusive index ranges to emit: each changed line padded by
+// 3 lines of context, with overlapping/adjacent ranges merged.
+func diffHunkRanges(lines []diffLine) []indexRange {
 	const contextSize = 3
-	var changedIndices []int
-	for i, l := range lines {
-		if l.op != diffmatchpatch.DiffEqual {
-			changedIndices = append(changedIndices, i)
-		}
-	}
-
-	if len(changedIndices) == 0 {
-		return "" // no changes
-	}
-
-	// Build inclusion ranges: for each changed line, include contextSize lines before/after.
-	// Merge overlapping or adjacent ranges (gap <= 2*contextSize = 6 context lines).
-	type indexRange struct{ start, end int } // inclusive
 	var ranges []indexRange
-	for _, ci := range changedIndices {
-		rStart := ci - contextSize
-		if rStart < 0 {
-			rStart = 0
+	for i, l := range lines {
+		if l.op == diffmatchpatch.DiffEqual {
+			continue
 		}
-		rEnd := ci + contextSize
-		if rEnd >= len(lines) {
-			rEnd = len(lines) - 1
-		}
+		rStart := max(i-contextSize, 0)
+		rEnd := min(i+contextSize, len(lines)-1)
 		if len(ranges) > 0 && rStart <= ranges[len(ranges)-1].end+1 {
-			// Merge with previous range
-			ranges[len(ranges)-1].end = rEnd
+			ranges[len(ranges)-1].end = rEnd // merge with previous
 		} else {
 			ranges = append(ranges, indexRange{rStart, rEnd})
 		}
 	}
+	return ranges
+}
 
-	// Emit unified diff
-	var buf bytes.Buffer
-	buf.WriteString(fmt.Sprintf("--- %s\n", filename))
-	buf.WriteString(fmt.Sprintf("+++ %s\n", filename))
-
-	for _, r := range ranges {
-		// Determine hunk header line numbers
-		var oldStart, oldCount, newStart, newCount int
-		for i := r.start; i <= r.end; i++ {
-			l := lines[i]
-			switch l.op {
-			case diffmatchpatch.DiffEqual:
-				if oldCount == 0 {
-					oldStart = l.oldN
-				}
-				if newCount == 0 {
-					newStart = l.newN
-				}
-				oldCount++
-				newCount++
-			case diffmatchpatch.DiffDelete:
-				if oldCount == 0 {
-					oldStart = l.oldN
-				}
-				if newCount == 0 {
-					// Set newStart from context or next available
-					newStart = l.oldN // approximate
-				}
-				oldCount++
-			case diffmatchpatch.DiffInsert:
-				if newCount == 0 {
-					newStart = l.newN
-				}
-				if oldCount == 0 {
-					oldStart = l.newN // approximate
-				}
-				newCount++
+// hunkBounds computes the unified-diff hunk header line numbers and counts for
+// lines[start:end+1]. newStart/oldStart for one-sided lines are approximate.
+func hunkBounds(lines []diffLine, start, end int) (oldStart, oldCount, newStart, newCount int) {
+	for i := start; i <= end; i++ {
+		l := lines[i]
+		switch l.op {
+		case diffmatchpatch.DiffEqual:
+			if oldCount == 0 {
+				oldStart = l.oldN
 			}
+			if newCount == 0 {
+				newStart = l.newN
+			}
+			oldCount++
+			newCount++
+		case diffmatchpatch.DiffDelete:
+			if oldCount == 0 {
+				oldStart = l.oldN
+			}
+			if newCount == 0 {
+				newStart = l.oldN // approximate
+			}
+			oldCount++
+		case diffmatchpatch.DiffInsert:
+			if newCount == 0 {
+				newStart = l.newN
+			}
+			if oldCount == 0 {
+				oldStart = l.newN // approximate
+			}
+			newCount++
 		}
+	}
+	return
+}
 
-		buf.WriteString(fmt.Sprintf("@@ -%d,%d +%d,%d @@\n", oldStart, oldCount, newStart, newCount))
-
-		for i := r.start; i <= r.end; i++ {
-			l := lines[i]
-			switch l.op {
-			case diffmatchpatch.DiffEqual:
-				buf.WriteString(fmt.Sprintf(" %s\n", l.text))
-			case diffmatchpatch.DiffDelete:
-				buf.WriteString(fmt.Sprintf("-%s\n", l.text))
-			case diffmatchpatch.DiffInsert:
-				buf.WriteString(fmt.Sprintf("+%s\n", l.text))
+// writeDiffBody writes the space/-/+ body lines for one hunk, appending the git-style
+// no-newline marker after the final line of any version that lacks a trailing newline.
+func writeDiffBody(buf *bytes.Buffer, lines []diffLine, start, end int, origNoEOL, modNoEOL bool, maxOldN, maxNewN int) {
+	for i := start; i <= end; i++ {
+		l := lines[i]
+		switch l.op {
+		case diffmatchpatch.DiffEqual:
+			fmt.Fprintf(buf, " %s\n", l.text)
+			if (origNoEOL && l.oldN == maxOldN) || (modNoEOL && l.newN == maxNewN) {
+				buf.WriteString(noNewlineMarker)
+			}
+		case diffmatchpatch.DiffDelete:
+			fmt.Fprintf(buf, "-%s\n", l.text)
+			if origNoEOL && l.oldN == maxOldN {
+				buf.WriteString(noNewlineMarker)
+			}
+		case diffmatchpatch.DiffInsert:
+			fmt.Fprintf(buf, "+%s\n", l.text)
+			if modNoEOL && l.newN == maxNewN {
+				buf.WriteString(noNewlineMarker)
 			}
 		}
 	}
-
-	return buf.String()
 }
 
 // resolveTextSelector finds the byte range for a text-based selection.
@@ -831,57 +852,11 @@ func (e *Engine) findLineRange(content []byte, lineStart, lineEnd int) (start, e
 	return start, end, nil
 }
 
-// applyTextEditOperation applies a text edit operation.
+// applyTextEditOperation applies a text-mode edit. Like AST mode, new_content is inserted
+// verbatim (no auto-indentation) with its line endings normalized to the file's convention.
 func (e *Engine) applyTextEditOperation(op EditOperation, content []byte, start, end int, newContent string) ([]byte, error) {
-	// Detect indentation at the selection point
-	indentation := detectIndentation(content, start)
-	indentedContent := indentContent(newContent, indentation)
-
-	var result []byte
-
-	switch op {
-	case EditReplace:
-		result = append(result, content[:start]...)
-		result = append(result, []byte(indentedContent)...)
-		// Preserve trailing newline: if selection ended with \n but replacement doesn't,
-		// re-add it to prevent line merging
-		if end > start && content[end-1] == '\n' && !strings.HasSuffix(indentedContent, "\n") {
-			result = append(result, '\n')
-		}
-		result = append(result, content[end:]...)
-
-	case EditInsertBefore:
-		insertion := indentedContent
-		if !strings.HasSuffix(insertion, "\n") {
-			insertion += "\n"
-		}
-		result = append(result, content[:start]...)
-		result = append(result, []byte(insertion)...)
-		result = append(result, content[start:]...)
-
-	case EditInsertAfter:
-		insertion := indentedContent
-		// Ensure separation from preceding content
-		if end > 0 && content[end-1] != '\n' && !strings.HasPrefix(insertion, "\n") {
-			insertion = "\n" + insertion
-		}
-		// Ensure separation from following content
-		if !strings.HasSuffix(insertion, "\n") && end < len(content) && content[end] != '\n' {
-			insertion += "\n"
-		}
-		result = append(result, content[:end]...)
-		result = append(result, []byte(insertion)...)
-		result = append(result, content[end:]...)
-
-	case EditDelete:
-		result = append(result, content[:start]...)
-		result = append(result, content[end:]...)
-
-	default:
-		return nil, errors.NewInvalidEditError(fmt.Sprintf("unknown operation: %s", op))
-	}
-
-	return result, nil
+	eol := detectLineEnding(content)
+	return spliceContent(op, content, start, end, normalizeLineEndings(newContent, eol), eol)
 }
 
 // truncateString truncates a string to maxLen with ellipsis.

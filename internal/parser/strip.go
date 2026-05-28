@@ -81,22 +81,21 @@ func stripLicense(content string) (string, bool) {
 		}
 	}
 
-	// Python/hash-style leading comment block
+	// Python/hash-style leading comment block. Only contiguous "#" lines belong to the
+	// header; a blank line ends it and is preserved as a separator (rather than being
+	// greedily swallowed and collapsed away).
 	if strings.HasPrefix(trimmed, "#") {
 		lines := strings.Split(trimmed, "\n")
-		var commentLines []string
-		var rest []string
-		inComment := true
+		var commentLines, rest []string
 		for i, l := range lines {
-			if inComment && (strings.HasPrefix(l, "#") || strings.TrimSpace(l) == "") {
+			if strings.HasPrefix(l, "#") {
 				commentLines = append(commentLines, l)
-			} else {
-				rest = lines[i:]
-				break
+				continue
 			}
+			rest = lines[i:]
+			break
 		}
-		block := strings.Join(commentLines, "\n")
-		lower := strings.ToLower(block)
+		lower := strings.ToLower(strings.Join(commentLines, "\n"))
 		if strings.Contains(lower, "copyright") ||
 			strings.Contains(lower, "license") ||
 			strings.Contains(lower, "spdx-license-identifier") {
@@ -240,60 +239,109 @@ func stripBlockComments(content string, lang protocol.Language) (string, bool) {
 	return stripCStyleBlockComments(content)
 }
 
-// stripCStyleBlockComments removes /* ... */ from content.
+// trimTrailingLineWhitespace drops trailing spaces/tabs from out (back to, but not past,
+// the previous newline). Used when a standalone comment line is removed so its leading
+// indentation does not linger as a whitespace-only line.
+func trimTrailingLineWhitespace(out []byte) []byte {
+	for len(out) > 0 && (out[len(out)-1] == ' ' || out[len(out)-1] == '\t') {
+		out = out[:len(out)-1]
+	}
+	return out
+}
+
+// skipLineTail advances i over trailing spaces/tabs and a CR, then a single LF — i.e. the
+// remainder of a line after a standalone comment's closer, including its \n or \r\n
+// terminator. Returns the new index.
+func skipLineTail(content string, i int) int {
+	for i < len(content) && (content[i] == ' ' || content[i] == '\t' || content[i] == '\r') {
+		i++
+	}
+	if i < len(content) && content[i] == '\n' {
+		i++
+	}
+	return i
+}
+
+// stripCStyleBlockComments removes /* ... */ comments. A comment that occupies a whole
+// line (only whitespace before it) is removed together with that line's indentation and
+// terminator; an inline comment (code precedes it) is removed in place, leaving the
+// surrounding line — and crucially its terminator — intact so lines are never merged.
 func stripCStyleBlockComments(content string) (string, bool) {
 	removed := false
-	var sb strings.Builder
+	out := make([]byte, 0, len(content))
+	lineHasNonSpace := false
 	i := 0
 	for i < len(content) {
 		if i+1 < len(content) && content[i] == '/' && content[i+1] == '*' {
-			// find closing */
-			end := strings.Index(content[i+2:], "*/")
-			if end >= 0 {
+			if end := strings.Index(content[i+2:], "*/"); end >= 0 {
 				removed = true
-				// advance past */
-				i = i + 2 + end + 2
-				// consume trailing newline
-				if i < len(content) && content[i] == '\n' {
-					i++
+				standalone := !lineHasNonSpace
+				i = i + 2 + end + 2 // advance past closing */
+				if standalone {
+					out = trimTrailingLineWhitespace(out)
+					i = skipLineTail(content, i)
+					lineHasNonSpace = false
 				}
 				continue
 			}
 		}
-		sb.WriteByte(content[i])
+		c := content[i]
+		switch c {
+		case '\n':
+			lineHasNonSpace = false
+		case ' ', '\t', '\r':
+			// whitespace: does not mark the line as having content
+		default:
+			lineHasNonSpace = true
+		}
+		out = append(out, c)
 		i++
 	}
 	if !removed {
 		return content, false
 	}
-	return sb.String(), true
+	return string(out), true
 }
 
-// stripPythonDocstrings removes triple-quoted strings (""" and ”').
+// stripPythonDocstrings removes triple-quoted strings (""" and ”'). As with block
+// comments, a standalone docstring line is removed along with its indentation and
+// terminator, while an inline triple-quoted string leaves its line's terminator intact.
 func stripPythonDocstrings(content string) (string, bool) {
 	removed := false
-	var sb strings.Builder
+	out := make([]byte, 0, len(content))
+	lineHasNonSpace := false
 	i := 0
 	for i < len(content) {
 		if i+2 < len(content) {
 			triple := content[i : i+3]
 			if triple == `"""` || triple == `'''` {
-				end := strings.Index(content[i+3:], triple)
-				if end >= 0 {
+				if end := strings.Index(content[i+3:], triple); end >= 0 {
 					removed = true
+					standalone := !lineHasNonSpace
 					i = i + 3 + end + 3
-					if i < len(content) && content[i] == '\n' {
-						i++
+					if standalone {
+						out = trimTrailingLineWhitespace(out)
+						i = skipLineTail(content, i)
+						lineHasNonSpace = false
 					}
 					continue
 				}
 			}
 		}
-		sb.WriteByte(content[i])
+		c := content[i]
+		switch c {
+		case '\n':
+			lineHasNonSpace = false
+		case ' ', '\t', '\r':
+			// whitespace: does not mark the line as having content
+		default:
+			lineHasNonSpace = true
+		}
+		out = append(out, c)
 		i++
 	}
 	if !removed {
 		return content, false
 	}
-	return sb.String(), true
+	return string(out), true
 }
