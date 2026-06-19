@@ -127,12 +127,22 @@ func (s *Server) handleFileSearch(ctx context.Context, request mcp.CallToolReque
 
 	// Apply in-process max_results cap and compute cursor footer.
 	var cursorLine string
-	if maxResults > 0 && len(results.Results) > maxResults {
+	switch {
+	case maxResults > 0 && len(results.Results) > maxResults:
+		// Cursor pages (offset>0) fetch all results, so cap here and emit a cursor.
 		remaining := len(results.Results) - maxResults
 		results.Results = results.Results[:maxResults]
 		results.Truncated = true
 		nextOffset := offset + maxResults
 		nextCursor := cursor.Encode(nextOffset, queryHash)
+		cursorLine = fmt.Sprintf("[cursor: %s, remaining: %d]", nextCursor, remaining)
+	case offset == 0 && maxResults > 0 && results.Truncated:
+		// First page: ripgrep capped us at exactly maxResults in parseOutput, but
+		// more matches exist. Emit a cursor so the caller can page instead of being
+		// told "truncated" with no way to continue. remaining derives from rg's
+		// total match count (a submatch count — an upper-bound proxy for rows).
+		nextCursor := cursor.Encode(maxResults, queryHash)
+		remaining := max(results.Total-maxResults, 1)
 		cursorLine = fmt.Sprintf("[cursor: %s, remaining: %d]", nextCursor, remaining)
 	}
 

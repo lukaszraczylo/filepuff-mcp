@@ -292,6 +292,39 @@ func TestFileSearchCursorStaleHash(t *testing.T) {
 	}
 }
 
+// TestFileSearchFirstPageCursor is a strict regression guard: when the first
+// page is capped by max_results but more matches exist, the response MUST carry
+// a cursor so the caller can page. Previously offset==0 emitted "(truncated...)"
+// with no cursor, silently breaking pagination on the common path.
+func TestFileSearchFirstPageCursor(t *testing.T) {
+	srv, tmpDir := newFeaturesServer(t)
+	if srv.searcher == nil {
+		t.Skip("rg not available")
+	}
+	ctx := context.Background()
+
+	// Corpus has 5 lines containing "func"; cap at 1 forces truncation on page 1.
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]interface{}{
+		"pattern":       "func",
+		"paths":         []interface{}{tmpDir},
+		"max_results":   float64(1),
+		"context_lines": float64(0),
+	}
+	res, err := srv.handleFileSearch(ctx, req)
+	if err != nil {
+		t.Fatalf("file_search error: %v", err)
+	}
+	text := res.Content[0].(mcp.TextContent).Text
+	if !strings.Contains(text, "[cursor:") {
+		t.Errorf("first page truncated at max_results=1 with 5 matches must emit a cursor, got:\n%s", text)
+	}
+	// The dead-end prose must not be used when a cursor is available.
+	if strings.Contains(text, "(truncated, showing subset") {
+		t.Errorf("dead-end truncation prose should be replaced by a cursor footer, got:\n%s", text)
+	}
+}
+
 func TestFileSearchPaginationCursor(t *testing.T) {
 	srv, tmpDir := newFeaturesServer(t)
 	if srv.searcher == nil {
