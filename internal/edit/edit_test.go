@@ -101,6 +101,22 @@ func TestValidateEdit(t *testing.T) {
 	}
 }
 
+// A replace with empty new_content should point the caller at operation=delete.
+func TestValidateReplaceEmptySuggestsDelete(t *testing.T) {
+	e := NewEngine(parser.NewRegistry())
+	err := e.validateASTEdit(&ASTEdit{
+		File:      "test.go",
+		Operation: EditReplace,
+		Selector:  ASTSelector{Kind: "function_declaration"},
+	})
+	if err == nil {
+		t.Fatal("expected error for replace with empty new_content")
+	}
+	if !strings.Contains(err.Error(), "operation=delete") {
+		t.Errorf("error should suggest operation=delete, got: %v", err)
+	}
+}
+
 func TestResolveSelector(t *testing.T) {
 	registry := parser.NewRegistry()
 	defer registry.Close()

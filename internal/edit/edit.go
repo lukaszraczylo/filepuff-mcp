@@ -270,7 +270,11 @@ func (e *Engine) validateBaseEdit(edit *ASTEdit) error {
 	switch edit.Operation {
 	case EditReplace, EditInsertBefore, EditInsertAfter:
 		if edit.NewContent == "" {
-			return errors.NewInvalidEditError(fmt.Sprintf("new_content is required for %s operation", edit.Operation))
+			msg := fmt.Sprintf("new_content is required for %s operation", edit.Operation)
+			if edit.Operation == EditReplace {
+				msg += " (to remove content instead, use operation=delete)"
+			}
+			return errors.NewInvalidEditError(msg)
 		}
 	case EditDelete:
 		// new_content not required
