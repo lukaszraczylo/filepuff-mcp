@@ -121,6 +121,12 @@ func NewClient(cmd *exec.Cmd) (*Client, error) {
 
 // drainStderr consumes stderr output to prevent the LSP server from blocking.
 // LSP servers may write diagnostic messages to stderr which we discard.
+//
+// Cancellation note: the goroutine parks in the blocking stderr.Read below, so
+// closing c.done does not interrupt it directly — termination relies on the
+// read returning an error when the pipe reaches EOF (the process is killed on
+// Close). The c.done check is only a best-effort fast path for the case where
+// done is already closed between reads.
 func (c *Client) drainStderr() {
 	buf := make([]byte, StderrBufferSize)
 	for {
