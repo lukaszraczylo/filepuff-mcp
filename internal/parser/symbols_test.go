@@ -7,6 +7,64 @@ import (
 	"github.com/lukaszraczylo/mcp-filepuff/pkg/protocol"
 )
 
+func TestFindSymbolCandidates(t *testing.T) {
+	r := NewRegistry()
+	defer r.Close()
+
+	// Two methods named String on different receivers, plus a unique func.
+	content := `package main
+
+type A struct{}
+
+func (a A) String() string { return "a" }
+
+type B struct{}
+
+func (b B) String() string { return "b" }
+
+func Unique() {}
+`
+	ctx := context.Background()
+	result, err := r.Parse(ctx, "test.go", []byte(content))
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+
+	t.Run("ambiguous name returns all candidates", func(t *testing.T) {
+		got := FindSymbolCandidates(result.Tree, []byte(content), "test.go", "String", "")
+		if len(got) != 2 {
+			t.Fatalf("got %d candidates for String, want 2: %+v", len(got), got)
+		}
+		if got[0].StartLine >= got[1].StartLine {
+			t.Errorf("candidates not in source order: %+v", got)
+		}
+	})
+
+	t.Run("unique name returns one candidate", func(t *testing.T) {
+		got := FindSymbolCandidates(result.Tree, []byte(content), "test.go", "Unique", "")
+		if len(got) != 1 {
+			t.Fatalf("got %d candidates for Unique, want 1: %+v", len(got), got)
+		}
+	})
+
+	t.Run("missing name returns none", func(t *testing.T) {
+		got := FindSymbolCandidates(result.Tree, []byte(content), "test.go", "Missing", "")
+		if len(got) != 0 {
+			t.Fatalf("got %d candidates for Missing, want 0", len(got))
+		}
+	})
+
+	t.Run("FindSymbolRange returns first match", func(t *testing.T) {
+		start, end, found := FindSymbolRange(result.Tree, []byte(content), "test.go", "String", "")
+		if !found {
+			t.Fatal("expected String to be found")
+		}
+		if start <= 0 || end < start {
+			t.Errorf("invalid range: start=%d end=%d", start, end)
+		}
+	})
+}
+
 func TestExtractGoSymbols(t *testing.T) {
 	r := NewRegistry()
 	defer r.Close()

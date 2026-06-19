@@ -910,17 +910,33 @@ func kindMatchesNode(kind protocol.SymbolKind, nodeType string) bool {
 	return true
 }
 
-// FindSymbolRange finds a named symbol in the AST and returns its line range (1-indexed, inclusive).
-// symbolKind filters by symbol kind (e.g. "function", "struct"); empty string matches any kind.
-// Returns (0, 0, false) if the symbol is not found.
-func FindSymbolRange(tree *sitter.Tree, content []byte, filename, symbolName string, symbolKind protocol.SymbolKind) (startLine, endLine int, found bool) {
+// SymbolCandidate is one symbol matching a name (and optional kind) lookup,
+// with its declaration node type and 1-indexed inclusive line range.
+type SymbolCandidate struct {
+	NodeType  string
+	StartLine int
+	EndLine   int
+}
+
+// symbolDeclNodeTypes is the set of declaration node types FindSymbolCandidates
+// treats as nameable symbols across supported languages.
+var symbolDeclNodeTypes = map[string]bool{
+	"function_declaration": true, "method_declaration": true, "type_declaration": true,
+	"function_definition": true, "class_definition": true, "class_declaration": true,
+	"interface_declaration": true, "type_alias_declaration": true,
+	"function_item": true, "struct_item": true, "enum_item": true, "trait_item": true,
+	"type_item": true, "const_item": true, "mod_item": true,
+}
+
+// FindSymbolCandidates returns every declaration whose name equals symbolName and
+// whose kind matches symbolKind (empty matches any). Multiple results indicate an
+// ambiguous lookup (e.g. two methods named String on different receivers).
+func FindSymbolCandidates(tree *sitter.Tree, content []byte, filename, symbolName string, symbolKind protocol.SymbolKind) []SymbolCandidate {
 	if tree == nil || symbolName == "" {
-		return
+		return nil
 	}
+	var candidates []SymbolCandidate
 	WalkTree(tree.RootNode(), func(n *sitter.Node) bool {
-		if found {
-			return false
-		}
 		nameNode := n.ChildByFieldName("name")
 		if nameNode == nil {
 			return true
@@ -928,22 +944,31 @@ func FindSymbolRange(tree *sitter.Tree, content []byte, filename, symbolName str
 		if GetNodeText(nameNode, content) != symbolName {
 			return true
 		}
-		switch n.Type() {
-		case "function_declaration", "method_declaration", "type_declaration",
-			"function_definition", "class_definition", "class_declaration",
-			"interface_declaration", "type_alias_declaration",
-			"function_item", "struct_item", "enum_item", "trait_item",
-			"type_item", "const_item", "mod_item":
-			if !kindMatchesNode(symbolKind, n.Type()) {
-				return true // kind mismatch, keep searching
-			}
-			r := NodeRange(n, filename)
-			startLine = r.Start.Line
-			endLine = r.End.Line
-			found = true
-			return false
+		if !symbolDeclNodeTypes[n.Type()] {
+			return true
 		}
+		if !kindMatchesNode(symbolKind, n.Type()) {
+			return true // kind mismatch, keep searching
+		}
+		r := NodeRange(n, filename)
+		candidates = append(candidates, SymbolCandidate{
+			NodeType:  n.Type(),
+			StartLine: r.Start.Line,
+			EndLine:   r.End.Line,
+		})
 		return true
 	})
-	return
+	return candidates
+}
+
+// FindSymbolRange finds a named symbol in the AST and returns its line range (1-indexed, inclusive).
+// symbolKind filters by symbol kind (e.g. "function", "struct"); empty string matches any kind.
+// Returns (0, 0, false) if the symbol is not found. On ambiguity it returns the first match;
+// callers that need to detect ambiguity should use FindSymbolCandidates.
+func FindSymbolRange(tree *sitter.Tree, content []byte, filename, symbolName string, symbolKind protocol.SymbolKind) (startLine, endLine int, found bool) {
+	candidates := FindSymbolCandidates(tree, content, filename, symbolName, symbolKind)
+	if len(candidates) == 0 {
+		return 0, 0, false
+	}
+	return candidates[0].StartLine, candidates[0].EndLine, true
 }

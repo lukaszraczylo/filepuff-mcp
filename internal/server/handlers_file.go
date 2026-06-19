@@ -440,12 +440,19 @@ func (s *Server) readOneFile(ctx context.Context, request mcp.CallToolRequest, p
 	// Symbol-based line range: find the symbol and use its exact bounds.
 	if symbolName != "" {
 		symbolKind := protocol.SymbolKind(request.GetString("symbol_kind", ""))
-		start, end, found := s.resolveSymbolLines(ctx, path, content, symbolName, symbolKind)
-		if !found {
+		candidates := s.resolveSymbolCandidates(ctx, path, content, symbolName, symbolKind)
+		switch len(candidates) {
+		case 0:
 			return "", fmt.Errorf("symbol %q not found in %s", symbolName, path)
+		case 1:
+			lineStart = candidates[0].StartLine
+			lineEnd = candidates[0].EndLine
+		default:
+			// Ambiguous: returning the first match risks reading the wrong
+			// symbol. List candidates so the caller can disambiguate.
+			return "", fmt.Errorf("symbol %q is ambiguous in %s (%d matches): %s — disambiguate with symbol_kind, or read a specific one with line_start/line_end",
+				symbolName, path, len(candidates), formatSymbolCandidates(candidates))
 		}
-		lineStart = start
-		lineEnd = end
 	}
 
 	// Clamp to valid range.
@@ -500,14 +507,25 @@ func (s *Server) readOneFile(ctx context.Context, request mcp.CallToolRequest, p
 	return output.String(), nil
 }
 
-// resolveSymbolLines parses the AST and returns the line range of the named symbol.
-// symbolKind optionally filters by kind (empty = any).
-func (s *Server) resolveSymbolLines(ctx context.Context, path string, content []byte, symbolName string, symbolKind protocol.SymbolKind) (startLine, endLine int, found bool) {
+// resolveSymbolCandidates parses the AST and returns every symbol matching the
+// name (and optional kind). Zero results means not found; more than one means an
+// ambiguous lookup. Returns nil on parse failure (treated as not found).
+func (s *Server) resolveSymbolCandidates(ctx context.Context, path string, content []byte, symbolName string, symbolKind protocol.SymbolKind) []parser.SymbolCandidate {
 	result, err := s.parser.Parse(ctx, path, content)
 	if err != nil {
-		return
+		return nil
 	}
-	return parser.FindSymbolRange(result.Tree, content, path, symbolName, symbolKind)
+	return parser.FindSymbolCandidates(result.Tree, content, path, symbolName, symbolKind)
+}
+
+// formatSymbolCandidates renders ambiguous symbol matches as a compact,
+// comma-separated list, e.g. "method_declaration L10-24, method_declaration L42-58".
+func formatSymbolCandidates(candidates []parser.SymbolCandidate) string {
+	parts := make([]string, len(candidates))
+	for i, c := range candidates {
+		parts[i] = fmt.Sprintf("%s L%d-%d", c.NodeType, c.StartLine, c.EndLine)
+	}
+	return strings.Join(parts, ", ")
 }
 
 // writeLines writes the selected line range into output, applying all formatting options.
