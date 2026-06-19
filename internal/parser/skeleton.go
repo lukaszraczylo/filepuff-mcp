@@ -215,7 +215,34 @@ func skeletonPythonNode(node *sitter.Node, content []byte, sb *strings.Builder, 
 			skeletonPythonNode(child, content, sb, indent)
 		}
 		return
-	case "function_definition", "decorated_definition":
+	case "decorated_definition":
+		// Emit the decorator line(s), then render the wrapped definition so its
+		// signature (def/class) is preserved — taking lines[0] of the whole node
+		// would keep only the first decorator and drop the signature entirely.
+		var def *sitter.Node
+		for i := 0; i < int(node.NamedChildCount()); i++ {
+			if child := node.NamedChild(i); child != nil {
+				if t := child.Type(); t == "function_definition" || t == "class_definition" {
+					def = child
+					break
+				}
+			}
+		}
+		if def != nil {
+			decText := strings.TrimRight(string(content[node.StartByte():def.StartByte()]), "\n")
+			for _, dl := range strings.Split(decText, "\n") {
+				if strings.TrimSpace(dl) == "" {
+					continue
+				}
+				sb.WriteString(indent)
+				sb.WriteString(dl)
+				sb.WriteString("\n")
+			}
+			skeletonPythonNode(def, content, sb, indent)
+			return
+		}
+		fallthrough
+	case "function_definition":
 		nodeText := string(content[node.StartByte():node.EndByte()])
 		lines := strings.SplitN(nodeText, "\n", 2)
 		sb.WriteString(indent)
