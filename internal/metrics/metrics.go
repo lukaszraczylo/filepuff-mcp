@@ -278,27 +278,27 @@ func (r *Registry) Expose() string {
 	// Export counters
 	for _, c := range r.counters {
 		if c.help != "" {
-			sb.WriteString(fmt.Sprintf("# HELP %s %s\n", c.name, c.help))
+			fmt.Fprintf(&sb, "# HELP %s %s\n", c.name, c.help)
 		}
-		sb.WriteString(fmt.Sprintf("# TYPE %s counter\n", c.name))
-		sb.WriteString(fmt.Sprintf("%s%s %d\n", c.name, formatLabels(c.labels), c.value.Load()))
+		fmt.Fprintf(&sb, "# TYPE %s counter\n", c.name)
+		fmt.Fprintf(&sb, "%s%s %d\n", c.name, formatLabels(c.labels), c.value.Load())
 	}
 
 	// Export gauges
 	for _, g := range r.gauges {
 		if g.help != "" {
-			sb.WriteString(fmt.Sprintf("# HELP %s %s\n", g.name, g.help))
+			fmt.Fprintf(&sb, "# HELP %s %s\n", g.name, g.help)
 		}
-		sb.WriteString(fmt.Sprintf("# TYPE %s gauge\n", g.name))
-		sb.WriteString(fmt.Sprintf("%s%s %d\n", g.name, formatLabels(g.labels), g.value.Load()))
+		fmt.Fprintf(&sb, "# TYPE %s gauge\n", g.name)
+		fmt.Fprintf(&sb, "%s%s %d\n", g.name, formatLabels(g.labels), g.value.Load())
 	}
 
 	// Export histograms
 	for _, h := range r.histograms {
 		if h.help != "" {
-			sb.WriteString(fmt.Sprintf("# HELP %s %s\n", h.name, h.help))
+			fmt.Fprintf(&sb, "# HELP %s %s\n", h.name, h.help)
 		}
-		sb.WriteString(fmt.Sprintf("# TYPE %s histogram\n", h.name))
+		fmt.Fprintf(&sb, "# TYPE %s histogram\n", h.name)
 
 		// Cumulative bucket counts
 		var cumulative int64
@@ -306,26 +306,26 @@ func (r *Registry) Expose() string {
 			cumulative += h.counts[i].Load()
 			labelStr := formatLabels(h.labels)
 			if labelStr == "" {
-				sb.WriteString(fmt.Sprintf("%s_bucket{le=\"%g\"} %d\n", h.name, bound, cumulative))
+				fmt.Fprintf(&sb, "%s_bucket{le=\"%g\"} %d\n", h.name, bound, cumulative)
 			} else {
 				// Insert le label into existing labels
-				sb.WriteString(fmt.Sprintf("%s_bucket%s %d\n", h.name,
-					strings.Replace(labelStr, "}", fmt.Sprintf(",le=\"%g\"}", bound), 1), cumulative))
+				fmt.Fprintf(&sb, "%s_bucket%s %d\n", h.name,
+					strings.Replace(labelStr, "}", fmt.Sprintf(",le=\"%g\"}", bound), 1), cumulative)
 			}
 		}
 		// +Inf bucket
 		cumulative += h.counts[len(h.buckets)].Load()
 		labelStr := formatLabels(h.labels)
 		if labelStr == "" {
-			sb.WriteString(fmt.Sprintf("%s_bucket{le=\"+Inf\"} %d\n", h.name, cumulative))
+			fmt.Fprintf(&sb, "%s_bucket{le=\"+Inf\"} %d\n", h.name, cumulative)
 		} else {
-			sb.WriteString(fmt.Sprintf("%s_bucket%s %d\n", h.name,
-				strings.Replace(labelStr, "}", ",le=\"+Inf\"}", 1), cumulative))
+			fmt.Fprintf(&sb, "%s_bucket%s %d\n", h.name,
+				strings.Replace(labelStr, "}", ",le=\"+Inf\"}", 1), cumulative)
 		}
 
 		// Sum and count
-		sb.WriteString(fmt.Sprintf("%s_sum%s %g\n", h.name, formatLabels(h.labels), h.Sum()))
-		sb.WriteString(fmt.Sprintf("%s_count%s %d\n", h.name, formatLabels(h.labels), h.count.Load()))
+		fmt.Fprintf(&sb, "%s_sum%s %g\n", h.name, formatLabels(h.labels), h.Sum())
+		fmt.Fprintf(&sb, "%s_count%s %d\n", h.name, formatLabels(h.labels), h.count.Load())
 	}
 
 	return sb.String()

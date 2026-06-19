@@ -211,7 +211,7 @@ func GenerateMarkdown() string {
 	var sb strings.Builder
 
 	sb.WriteString("# MCP Filepuff API Reference\n\n")
-	sb.WriteString(fmt.Sprintf("> Auto-generated on %s\n\n", time.Now().Format("2006-01-02")))
+	fmt.Fprintf(&sb, "> Auto-generated on %s\n\n", time.Now().Format("2006-01-02"))
 	sb.WriteString("This document provides detailed API documentation for all MCP tools available in filepuff.\n\n")
 
 	// Table of Contents
@@ -228,9 +228,9 @@ func GenerateMarkdown() string {
 	}
 
 	for _, cat := range categoryOrder {
-		sb.WriteString(fmt.Sprintf("### %s\n", cat))
+		fmt.Fprintf(&sb, "### %s\n", cat)
 		for _, tool := range categories[cat] {
-			sb.WriteString(fmt.Sprintf("- [`%s`](#%s)\n", tool.Name, tool.Name))
+			fmt.Fprintf(&sb, "- [`%s`](#%s)\n", tool.Name, tool.Name)
 		}
 		sb.WriteString("\n")
 	}
@@ -240,11 +240,11 @@ func GenerateMarkdown() string {
 	sb.WriteString("## Tool Reference\n\n")
 
 	for _, cat := range categoryOrder {
-		sb.WriteString(fmt.Sprintf("### %s\n\n", cat))
+		fmt.Fprintf(&sb, "### %s\n\n", cat)
 
 		for _, tool := range categories[cat] {
-			sb.WriteString(fmt.Sprintf("#### `%s`\n\n", tool.Name))
-			sb.WriteString(fmt.Sprintf("%s\n\n", tool.Description))
+			fmt.Fprintf(&sb, "#### `%s`\n\n", tool.Name)
+			fmt.Fprintf(&sb, "%s\n\n", tool.Description)
 
 			// Read-only indicator
 			if tool.ReadOnly {
@@ -263,8 +263,8 @@ func GenerateMarkdown() string {
 					if param.Required {
 						required = "**Yes**"
 					}
-					sb.WriteString(fmt.Sprintf("| `%s` | `%s` | %s | %s |\n",
-						param.Name, param.Type, required, param.Description))
+					fmt.Fprintf(&sb, "| `%s` | `%s` | %s | %s |\n",
+						param.Name, param.Type, required, param.Description)
 				}
 				sb.WriteString("\n")
 			} else {
@@ -285,7 +285,7 @@ func GenerateMarkdown() string {
 			if len(tool.Notes) > 0 {
 				sb.WriteString("**Notes:**\n\n")
 				for _, note := range tool.Notes {
-					sb.WriteString(fmt.Sprintf("- %s\n", note))
+					fmt.Fprintf(&sb, "- %s\n", note)
 				}
 				sb.WriteString("\n")
 			}

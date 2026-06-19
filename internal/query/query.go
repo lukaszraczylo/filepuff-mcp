@@ -486,7 +486,7 @@ func FormatResultsWithOptions(results []MatchResult, maxResults int, format stri
 	// Emit preamble only when verbose=true is explicitly passed (opt-in, default off).
 	wantVerbose := len(verbose) > 0 && verbose[0]
 	if wantVerbose {
-		sb.WriteString(fmt.Sprintf("Found %d match(es):\n", renderCount))
+		fmt.Fprintf(&sb, "Found %d match(es):\n", renderCount)
 	}
 
 	switch format {
@@ -498,13 +498,13 @@ func FormatResultsWithOptions(results []MatchResult, maxResults int, format stri
 				nodeType = r.Node.Type()
 			}
 			firstLine := firstLineOf(r.Text, 80)
-			sb.WriteString(fmt.Sprintf("%s:%d (%s) %s\n", r.File, r.Location.Line, nodeType, firstLine))
+			fmt.Fprintf(&sb, "%s:%d (%s) %s\n", r.File, r.Location.Line, nodeType, firstLine)
 		}
 
 	case "location":
 		for i := 0; i < renderCount; i++ {
 			r := results[i]
-			sb.WriteString(fmt.Sprintf("%s:%d\n", r.File, r.Location.Line))
+			fmt.Fprintf(&sb, "%s:%d\n", r.File, r.Location.Line)
 		}
 
 	default: // "verbose"
@@ -514,7 +514,7 @@ func FormatResultsWithOptions(results []MatchResult, maxResults int, format stri
 			if r.Node != nil {
 				nodeType = r.Node.Type()
 			}
-			sb.WriteString(fmt.Sprintf("**%s:%d** (%s)\n", r.File, r.Location.Line, nodeType))
+			fmt.Fprintf(&sb, "**%s:%d** (%s)\n", r.File, r.Location.Line, nodeType)
 
 			// Truncate very long text
 			text := r.Text
@@ -538,7 +538,7 @@ func FormatResultsWithOptions(results []MatchResult, maxResults int, format stri
 					if len(capText) > 50 {
 						capText = capText[:50] + "..."
 					}
-					sb.WriteString(fmt.Sprintf("$%s=%s", name, capText))
+					fmt.Fprintf(&sb, "$%s=%s", name, capText)
 				}
 				sb.WriteString("\n")
 			}
@@ -549,7 +549,7 @@ func FormatResultsWithOptions(results []MatchResult, maxResults int, format stri
 	if remaining > 0 {
 		// Caller must embed the cursor token; we just append the remaining count hint.
 		// The actual [cursor: ...] line is written by the handler after calling MakeCursor.
-		sb.WriteString(fmt.Sprintf("[remaining: %d]\n", remaining))
+		fmt.Fprintf(&sb, "[remaining: %d]\n", remaining)
 	}
 
 	return sb.String()

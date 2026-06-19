@@ -199,7 +199,7 @@ func TestSessionPrefsASTQueryMaxResults(t *testing.T) {
 	var sb strings.Builder
 	sb.WriteString("package main\n\n")
 	for i := 0; i < 5; i++ {
-		sb.WriteString(fmt.Sprintf("func Fn%c() {}\n\n", rune('A'+i)))
+		fmt.Fprintf(&sb, "func Fn%c() {}\n\n", rune('A'+i))
 	}
 	testFile := filepath.Join(tmpDir, "many.go")
 	if err := os.WriteFile(testFile, []byte(sb.String()), 0600); err != nil {
@@ -281,7 +281,7 @@ func TestSessionPrefsMaxResultsExplicitOverride(t *testing.T) {
 	var sb strings.Builder
 	sb.WriteString("package main\n\n")
 	for i := 0; i < 5; i++ {
-		sb.WriteString(fmt.Sprintf("func Fn%c() {}\n\n", rune('A'+i)))
+		fmt.Fprintf(&sb, "func Fn%c() {}\n\n", rune('A'+i))
 	}
 	testFile := filepath.Join(tmpDir, "many.go")
 	if err := os.WriteFile(testFile, []byte(sb.String()), 0600); err != nil {

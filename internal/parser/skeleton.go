@@ -44,11 +44,11 @@ func SkeletonFile(ctx context.Context, reg *Registry, filename string, content [
 func renderSymbolsOnly(syms []protocol.Symbol, _ string, lang protocol.Language, content []byte) string {
 	lines := strings.Split(string(content), "\n")
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("// skeleton unavailable for %s — symbol list only\n", lang))
+	fmt.Fprintf(&sb, "// skeleton unavailable for %s — symbol list only\n", lang)
 	for _, s := range syms {
-		sb.WriteString(fmt.Sprintf("// %s %s  (line %d)\n", s.Kind, s.Name, s.Location.Line))
+		fmt.Fprintf(&sb, "// %s %s  (line %d)\n", s.Kind, s.Name, s.Location.Line)
 		if s.Doc != "" {
-			sb.WriteString(fmt.Sprintf("// doc: %s\n", s.Doc))
+			fmt.Fprintf(&sb, "// doc: %s\n", s.Doc)
 		}
 		if s.Location.Line >= 1 && s.Location.Line <= len(lines) {
 			sb.WriteString(lines[s.Location.Line-1] + " { ... }\n")

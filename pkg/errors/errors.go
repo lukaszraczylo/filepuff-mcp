@@ -77,24 +77,24 @@ func (e *StructuredError) Error() string {
 	var sb strings.Builder
 
 	// Error code and message
-	sb.WriteString(fmt.Sprintf("[%d] %s", e.Code, e.Message))
+	fmt.Fprintf(&sb, "[%d] %s", e.Code, e.Message)
 
 	// Context if available
 	if len(e.Context) > 0 {
 		sb.WriteString("\nContext:")
 		for k, v := range e.Context {
-			sb.WriteString(fmt.Sprintf("\n  %s: %v", k, v))
+			fmt.Fprintf(&sb, "\n  %s: %v", k, v)
 		}
 	}
 
 	// Remediation if available
 	if e.Remediation != "" {
-		sb.WriteString(fmt.Sprintf("\nHow to fix: %s", e.Remediation))
+		fmt.Fprintf(&sb, "\nHow to fix: %s", e.Remediation)
 	}
 
 	// Underlying cause if available
 	if e.Cause != nil {
-		sb.WriteString(fmt.Sprintf("\nCaused by: %v", e.Cause))
+		fmt.Fprintf(&sb, "\nCaused by: %v", e.Cause)
 	}
 
 	return sb.String()
@@ -215,7 +215,7 @@ func captureStack(skip int) string {
 	for {
 		frame, more := frames.Next()
 		if !strings.Contains(frame.File, "runtime/") {
-			sb.WriteString(fmt.Sprintf("\n  %s:%d %s", frame.File, frame.Line, frame.Function))
+			fmt.Fprintf(&sb, "\n  %s:%d %s", frame.File, frame.Line, frame.Function)
 		}
 		if !more {
 			break

@@ -389,13 +389,13 @@ func (s *Searcher) FormatResultsWithOptions(results *SearchResults, opts FormatO
 	if opts.Verbose {
 		totalMatches := len(results.Results)
 		fileCount := len(fileResults)
-		sb.WriteString(fmt.Sprintf("Found %d matches in %d files", totalMatches, fileCount))
+		fmt.Fprintf(&sb, "Found %d matches in %d files", totalMatches, fileCount)
 		if results.Truncated {
-			sb.WriteString(fmt.Sprintf(" (truncated, total: %d)", results.Total))
+			fmt.Fprintf(&sb, " (truncated, total: %d)", results.Total)
 		}
 		sb.WriteString(":\n\n")
 	} else if results.Truncated {
-		sb.WriteString(fmt.Sprintf("(truncated, showing subset of %d total matches)\n\n", results.Total))
+		fmt.Fprintf(&sb, "(truncated, showing subset of %d total matches)\n\n", results.Total)
 	}
 
 	// Write results grouped by file
@@ -408,7 +408,7 @@ func (s *Searcher) FormatResultsWithOptions(results *SearchResults, opts FormatO
 			}
 		}
 
-		sb.WriteString(fmt.Sprintf("**%s**\n", relPath))
+		fmt.Fprintf(&sb, "**%s**\n", relPath)
 
 		if opts.Cluster {
 			writeClusteredResults(&sb, fileResults[file])
