@@ -266,6 +266,28 @@ struct Foo {
 
 // ---- Feature 2: strip flag ----
 
+// A misspelled symbol_name should fail with a "did you mean" hint listing the
+// closest real symbols, so the model can self-correct.
+func TestReadSymbolNotFoundSuggestsNearest(t *testing.T) {
+	tmpDir := t.TempDir()
+	srv := newTestServer(t, tmpDir)
+
+	goSrc := "package main\n\nfunc Hello() {}\n\nfunc Goodbye() {}\n"
+	f := writeFile(t, tmpDir, "main.go", goSrc)
+
+	out := callRead(t, srv, map[string]interface{}{
+		"path":        f,
+		"symbol_name": "Helo", // typo for Hello
+	})
+
+	if !strings.Contains(out, "not found") {
+		t.Errorf("expected not-found error, got:\n%s", out)
+	}
+	if !strings.Contains(out, "did you mean") || !strings.Contains(out, "Hello") {
+		t.Errorf("expected suggestion of Hello, got:\n%s", out)
+	}
+}
+
 func TestStripImportsGo(t *testing.T) {
 	tmpDir := t.TempDir()
 	srv := newTestServer(t, tmpDir)

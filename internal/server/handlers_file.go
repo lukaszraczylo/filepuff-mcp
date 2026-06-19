@@ -16,8 +16,17 @@ import (
 	"github.com/lukaszraczylo/mcp-filepuff/internal/parser"
 	"github.com/lukaszraczylo/mcp-filepuff/internal/search"
 	"github.com/lukaszraczylo/mcp-filepuff/pkg/errors"
+	"github.com/lukaszraczylo/mcp-filepuff/pkg/fuzzy"
 	"github.com/lukaszraczylo/mcp-filepuff/pkg/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
+)
+
+// Symbol-suggestion tuning for not-found symbol_name reads.
+const (
+	// maxSymbolSuggestionDistance is the max fuzzy edit distance for a suggestion.
+	maxSymbolSuggestionDistance = 3
+	// maxSymbolSuggestions caps how many "did you mean" names are listed.
+	maxSymbolSuggestions = 3
 )
 
 // handleFileSearch handles the file_search tool.
@@ -443,7 +452,7 @@ func (s *Server) readOneFile(ctx context.Context, request mcp.CallToolRequest, p
 		candidates := s.resolveSymbolCandidates(ctx, path, content, symbolName, symbolKind)
 		switch len(candidates) {
 		case 0:
-			return "", fmt.Errorf("symbol %q not found in %s", symbolName, path)
+			return "", fmt.Errorf("symbol %q not found in %s%s", symbolName, path, s.nearestSymbolSuggestion(ctx, path, content, symbolName))
 		case 1:
 			lineStart = candidates[0].StartLine
 			lineEnd = candidates[0].EndLine
@@ -516,6 +525,41 @@ func (s *Server) resolveSymbolCandidates(ctx context.Context, path string, conte
 		return nil
 	}
 	return parser.FindSymbolCandidates(result.Tree, content, path, symbolName, symbolKind)
+}
+
+// nearestSymbolSuggestion returns a " — did you mean: a, b, c?" hint listing the
+// closest symbol names in the file to name, or "" if none are reasonably close.
+// The re-parse is cheap: the tree is served from the parser cache.
+func (s *Server) nearestSymbolSuggestion(ctx context.Context, path string, content []byte, name string) string {
+	result, err := s.parser.Parse(ctx, path, content)
+	if err != nil {
+		return ""
+	}
+	syms := parser.ExtractSymbols(result.Tree, content, result.Language, path)
+	if len(syms) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(syms))
+	seen := make(map[string]bool, len(syms))
+	for _, sym := range syms {
+		if !seen[sym.Name] {
+			seen[sym.Name] = true
+			names = append(names, sym.Name)
+		}
+	}
+	matches := fuzzy.New(maxSymbolSuggestionDistance).Match(name, names)
+	if len(matches) == 0 {
+		return ""
+	}
+	top := matches
+	if len(top) > maxSymbolSuggestions {
+		top = top[:maxSymbolSuggestions]
+	}
+	suggestions := make([]string, len(top))
+	for i, m := range top {
+		suggestions[i] = m.Text
+	}
+	return " — did you mean: " + strings.Join(suggestions, ", ") + "?"
 }
 
 // formatSymbolCandidates renders ambiguous symbol matches as a compact,
