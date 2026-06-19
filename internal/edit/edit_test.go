@@ -369,6 +369,45 @@ func Hello() {
 	}
 }
 
+// An edit on a CRLF file must normalize inserted LF content to CRLF so the file
+// keeps a single, consistent line-ending convention (a documented guarantee).
+func TestApplyPreservesCRLF(t *testing.T) {
+	registry := parser.NewRegistry()
+	defer registry.Close()
+	e := NewEngine(registry)
+
+	tmpDir := t.TempDir()
+	tmpFile := filepath.Join(tmpDir, "crlf.go")
+	content := "package main\r\n\r\nfunc Hello() {\r\n\tprintln(\"hi\")\r\n}\r\n"
+	if err := os.WriteFile(tmpFile, []byte(content), 0600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	_, err := e.Apply(context.Background(), &ASTEdit{
+		File:       tmpFile,
+		Operation:  EditReplace,
+		Selector:   ASTSelector{Kind: "function_declaration"},
+		NewContent: "func Bye() {\n\tprintln(\"bye\")\n}", // LF newlines on input
+	})
+	if err != nil {
+		t.Fatalf("apply failed: %v", err)
+	}
+
+	out, err := os.ReadFile(tmpFile)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	s := string(out)
+	if !strings.Contains(s, "func Bye()") {
+		t.Fatalf("edit not applied:\n%q", s)
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\n' && (i == 0 || s[i-1] != '\r') {
+			t.Fatalf("bare LF at offset %d — CRLF not preserved:\n%q", i, s)
+		}
+	}
+}
+
 func TestGenerateDiff(t *testing.T) {
 	original := "line1\nline2\nline3"
 	modified := "line1\nmodified\nline3"
