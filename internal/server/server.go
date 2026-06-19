@@ -251,7 +251,7 @@ func (s *Server) registerTools() {
 				mcp.Description("Maximum number of results to return (default: 100, page size for pagination)"),
 			),
 			mcp.WithString("format",
-				mcp.Description("Output format: \"verbose\" (default, full code+captures), \"compact\" (one line per match), \"location\" (file:line only)"),
+				mcp.Description("Output format: \"compact\" (default, one line per match), \"verbose\" (full code+captures), \"location\" (file:line only)"),
 			),
 			mcp.WithString("cursor",
 				mcp.Description("Pagination cursor from a previous truncated response. Pass back to fetch the next page."),

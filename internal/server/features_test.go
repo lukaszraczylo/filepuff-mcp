@@ -55,16 +55,18 @@ func Epsilon() int { return 2 }
 
 // ---- Feature 1: ast_query format flag ----
 
-func TestASTQueryFormatVerboseDefault(t *testing.T) {
+func TestASTQueryFormatCompactDefault(t *testing.T) {
 	srv, tmpDir := newFeaturesServer(t)
 	ctx := context.Background()
 
-	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]interface{}{
+	// Default (no format arg) is compact: one line per match, no code blocks.
+	args := map[string]interface{}{
 		"pattern":  "func $NAME() string",
 		"language": "go",
 		"paths":    []interface{}{tmpDir},
 	}
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = args
 	res, err := srv.handleASTQuery(ctx, req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -72,10 +74,19 @@ func TestASTQueryFormatVerboseDefault(t *testing.T) {
 	if res == nil || len(res.Content) == 0 {
 		t.Fatal("nil/empty result")
 	}
-	text := res.Content[0].(mcp.TextContent).Text
-	// verbose mode has code blocks
-	if !strings.Contains(text, "```") {
-		t.Errorf("verbose mode should have code blocks, got:\n%s", text)
+	if text := res.Content[0].(mcp.TextContent).Text; strings.Contains(text, "```") {
+		t.Errorf("compact default should NOT have code blocks, got:\n%s", text)
+	}
+
+	// Verbose remains available on explicit request.
+	args["format"] = "verbose"
+	req.Params.Arguments = args
+	res, err = srv.handleASTQuery(ctx, req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if text := res.Content[0].(mcp.TextContent).Text; !strings.Contains(text, "```") {
+		t.Errorf("format=verbose should have code blocks, got:\n%s", text)
 	}
 }
 

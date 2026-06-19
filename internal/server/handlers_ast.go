@@ -67,7 +67,10 @@ func (s *Server) resolveASTQueryParams(request mcp.CallToolRequest) (*astQueryPa
 		if prefsFormat != "" {
 			p.format = prefsFormat
 		} else {
-			p.format = "verbose"
+			// Default to compact (one line per match): far fewer tokens than
+			// verbose (full code + captures) on multi-match queries. Callers can
+			// opt into verbose per-call or via the default_format session pref.
+			p.format = "compact"
 		}
 	}
 

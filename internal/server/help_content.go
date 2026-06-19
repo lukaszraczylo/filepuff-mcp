@@ -75,7 +75,7 @@ const helpASTQuery = "# ast_query — flags and examples\n\n" +
 	"| Flag | Effect |\n" +
 	"|------|--------|\n" +
 	"| `verbose=true` | Emit `Found N match(es):` preamble (v1 behaviour). Default: false. |\n" +
-	"| `format` | `verbose` (default, full code+captures) \\| `compact` (one line per match) \\| `location` (file:line only) |\n" +
+	"| `format` | `compact` (default, one line per match) \\| `verbose` (full code+captures) \\| `location` (file:line only) |\n" +
 	"| `cursor` | Opaque pagination token from a previous truncated response — fetches next page. |\n" +
 	"| `max_results` | Page size (default: 100). |\n" +
 	"| `name_exact` | Exact symbol name to match. |\n" +
