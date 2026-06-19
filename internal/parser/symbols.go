@@ -152,12 +152,20 @@ func extractGoVarConst(n *sitter.Node, content []byte, filename string) []protoc
 
 	WalkTree(n, func(node *sitter.Node) bool {
 		if node.Type() == "const_spec" || node.Type() == "var_spec" {
-			nameNode := node.ChildByFieldName("name")
-			if nameNode != nil {
+			// A spec may declare multiple names (e.g. var a, b = 1, 2);
+			// ChildByFieldName returns only the first, so iterate all "name" fields.
+			for i := 0; i < int(node.ChildCount()); i++ {
+				if node.FieldNameForChild(i) != "name" {
+					continue
+				}
+				nameNode := node.Child(i)
+				if nameNode == nil {
+					continue
+				}
 				symbols = append(symbols, protocol.Symbol{
 					Name:     GetNodeText(nameNode, content),
 					Kind:     kind,
-					Location: NodeLocation(node, filename),
+					Location: NodeLocation(nameNode, filename),
 				})
 			}
 		}

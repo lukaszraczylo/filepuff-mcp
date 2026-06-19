@@ -123,6 +123,44 @@ var globalVar = "test"
 	}
 }
 
+// Grouped var/const specs declare multiple names on one spec (var a, b = 1, 2);
+// every name must surface as its own symbol, not just the first.
+func TestExtractGoVarConstMultiName(t *testing.T) {
+	r := NewRegistry()
+	defer r.Close()
+
+	content := `package main
+
+var a, b = 1, 2
+
+const (
+	C, D = 3, 4
+)
+`
+	ctx := context.Background()
+	result, err := r.Parse(ctx, "test.go", []byte(content))
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+
+	symbols := ExtractSymbols(result.Tree, []byte(content), protocol.LangGo, "test.go")
+	want := map[string]protocol.SymbolKind{
+		"a": protocol.SymbolVariable,
+		"b": protocol.SymbolVariable,
+		"C": protocol.SymbolConstant,
+		"D": protocol.SymbolConstant,
+	}
+	got := make(map[string]protocol.SymbolKind)
+	for _, sym := range symbols {
+		got[sym.Name] = sym.Kind
+	}
+	for name, kind := range want {
+		if got[name] != kind {
+			t.Errorf("symbol %q: got kind %q, want %q (symbols: %+v)", name, got[name], kind, symbols)
+		}
+	}
+}
+
 func TestExtractJSSymbols(t *testing.T) {
 	r := NewRegistry()
 	defer r.Close()
