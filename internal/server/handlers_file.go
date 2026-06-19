@@ -3,6 +3,7 @@ package server
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -184,7 +185,7 @@ func (s *Server) handleFileRead(ctx context.Context, request mcp.CallToolRequest
 			}
 			result, err := s.readOneFile(ctx, request, p)
 			if err != nil {
-				output.WriteString(fmt.Sprintf("--- %s ---\n[error: %s]\n", p, errors.SanitizeError(err)))
+				fmt.Fprintf(&output, "--- %s ---\n[error: %s]\n", p, errors.SanitizeError(err))
 				continue
 			}
 			// Extract etag from result footer for dedup check.
@@ -192,12 +193,12 @@ func (s *Server) handleFileRead(ctx context.Context, request mcp.CallToolRequest
 			if etag != "" {
 				if firstPath, seen := seenEtag[etag]; seen {
 					// Duplicate content: emit pointer instead of full content.
-					output.WriteString(fmt.Sprintf("--- %s ---\n[duplicate of %s, etag: %s]\n", p, firstPath, etag))
+					fmt.Fprintf(&output, "--- %s ---\n[duplicate of %s, etag: %s]\n", p, firstPath, etag)
 					continue
 				}
 				seenEtag[etag] = p
 			}
-			output.WriteString(fmt.Sprintf("--- %s ---\n%s", p, result))
+			fmt.Fprintf(&output, "--- %s ---\n%s", p, result)
 		}
 		return mcp.NewToolResultText(output.String()), nil
 	}
@@ -571,6 +572,21 @@ func extractEtag(result string) string {
 // splitLines splits a string into lines.
 // For large files (> 1MB), uses bufio.Scanner which is more memory efficient.
 // For smaller files, uses simple string split which is faster.
+// countLines returns the number of source lines in content. Unlike
+// len(splitLines(...)), it does not over-count newline-terminated files
+// (a trailing "\n" does not introduce a phantom final line) and avoids
+// materializing the line slice.
+func countLines(content []byte) int {
+	if len(content) == 0 {
+		return 0
+	}
+	n := bytes.Count(content, []byte{'\n'})
+	if content[len(content)-1] != '\n' {
+		n++
+	}
+	return n
+}
+
 func splitLines(s string) []string {
 	const largeSizeThreshold = 1024 * 1024 // 1MB
 

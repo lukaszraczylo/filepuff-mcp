@@ -137,11 +137,13 @@ func (s *Server) runASTQueryWalk(ctx context.Context, p *astQueryParams, exts []
 				return nil
 			}
 
-			content, err := os.ReadFile(path)
-			if err != nil {
+			// Skip oversized files before reading them off disk.
+			if info.Size() > s.cfg.MaxFileSize {
 				return nil
 			}
-			if int64(len(content)) > s.cfg.MaxFileSize {
+
+			content, err := os.ReadFile(path)
+			if err != nil {
 				return nil
 			}
 
@@ -260,12 +262,12 @@ func (s *Server) generateASTSummary(ctx context.Context, path string, content []
 		}
 	}
 
-	sb.WriteString(fmt.Sprintf("**%s** (%d lines, %s)\n\n", relPath, len(splitLines(string(content))), lang))
+	fmt.Fprintf(&sb, "**%s** (%d lines, %s)\n\n", relPath, countLines(content), lang)
 	sb.WriteString("Symbols:\n")
 
 	for _, sym := range symbols {
 		kindStr := symbolKindIcon(sym.Kind)
-		sb.WriteString(fmt.Sprintf("  %s %s  L%d\n", kindStr, sym.Name, sym.Location.Line))
+		fmt.Fprintf(&sb, "  %s %s  L%d\n", kindStr, sym.Name, sym.Location.Line)
 	}
 
 	return sb.String()

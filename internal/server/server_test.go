@@ -415,6 +415,32 @@ func TestSplitLinesLargeFileNoTrailingNewline(t *testing.T) {
 	}
 }
 
+// TestCountLines verifies countLines reports source line counts without the
+// phantom trailing line that len(splitLines(...)) produces for newline-terminated
+// files.
+func TestCountLines(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    int
+	}{
+		{name: "empty", content: "", want: 0},
+		{name: "single line no newline", content: "a", want: 1},
+		{name: "single line trailing newline", content: "a\n", want: 1},
+		{name: "two lines trailing newline", content: "a\nb\n", want: 2},
+		{name: "two lines no trailing newline", content: "a\nb", want: 2},
+		{name: "blank lines", content: "\n\n\n", want: 3},
+		{name: "crlf trailing", content: "a\r\nb\r\n", want: 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := countLines([]byte(tt.content)); got != tt.want {
+				t.Errorf("countLines(%q) = %d, want %d", tt.content, got, tt.want)
+			}
+		})
+	}
+}
+
 // TestSplitLinesLongLine verifies the scanner gracefully handles very long lines
 // (up to the 1MB buffer limit set in C-05 fix).
 func TestSplitLinesLongLine(t *testing.T) {
