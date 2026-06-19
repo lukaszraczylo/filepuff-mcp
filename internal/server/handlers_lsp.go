@@ -115,10 +115,14 @@ func (s *Server) handleSymbolAtFallback(ctx context.Context, file string, line, 
 
 	var output strings.Builder
 	if verbose {
-		output.WriteString("**Symbol Information** (AST fallback)\n\n")
+		output.WriteString("**Symbol Information** (AST fallback — LSP unavailable)\n\n")
+	} else {
+		// Always signal the degraded result so the model knows this is an AST
+		// guess, not real LSP type info, and can decide whether to retry.
+		output.WriteString("[AST fallback — LSP unavailable]\n")
 	}
-	output.WriteString(fmt.Sprintf("Node type: `%s`\n", node.Type()))
-	output.WriteString(fmt.Sprintf("Text: `%s`\n", parser.GetNodeText(node, content)))
+	fmt.Fprintf(&output, "Node type: `%s`\n", node.Type())
+	fmt.Fprintf(&output, "Text: `%s`\n", parser.GetNodeText(node, content))
 
 	return mcp.NewToolResultText(output.String()), nil
 }
@@ -136,12 +140,12 @@ func (s *Server) lspDefinition(ctx context.Context, file string, line, col int, 
 
 	var output strings.Builder
 	if verbose {
-		output.WriteString(fmt.Sprintf("Found %d definition(s):\n\n", len(locations)))
+		fmt.Fprintf(&output, "Found %d definition(s):\n\n", len(locations))
 	}
 
 	for _, loc := range locations {
 		filePath := lsp.URIToFile(loc.URI)
-		output.WriteString(fmt.Sprintf("**%s:%d:%d**\n", filePath, loc.Range.Start.Line+1, loc.Range.Start.Character+1))
+		fmt.Fprintf(&output, "**%s:%d:%d**\n", filePath, loc.Range.Start.Line+1, loc.Range.Start.Character+1)
 
 		preview := s.readFilePreview(filePath, loc.Range.Start.Line+1, 3)
 		if preview != "" {
@@ -187,7 +191,7 @@ func (s *Server) lspReferences(ctx context.Context, file string, line, col int, 
 func formatReferences(fileGroups map[string][]lsp.Location, fileOrder []string, total int, compact bool, verbose bool) string {
 	var output strings.Builder
 	if verbose {
-		output.WriteString(fmt.Sprintf("Found %d reference(s):\n\n", total))
+		fmt.Fprintf(&output, "Found %d reference(s):\n\n", total)
 	}
 
 	for _, filePath := range fileOrder {
@@ -195,9 +199,9 @@ func formatReferences(fileGroups map[string][]lsp.Location, fileOrder []string, 
 		if compact {
 			output.WriteString(formatReferencesCompact(filePath, locs))
 		} else {
-			output.WriteString(fmt.Sprintf("**%s** (%d)\n", filePath, len(locs)))
+			fmt.Fprintf(&output, "**%s** (%d)\n", filePath, len(locs))
 			for _, loc := range locs {
-				output.WriteString(fmt.Sprintf("  L%d:%d\n", loc.Range.Start.Line+1, loc.Range.Start.Character+1))
+				fmt.Fprintf(&output, "  L%d:%d\n", loc.Range.Start.Line+1, loc.Range.Start.Character+1)
 			}
 			output.WriteString("\n")
 		}
@@ -273,7 +277,7 @@ func (s *Server) readFilePreview(file string, line, contextLines int) string {
 		if i+1 == line {
 			prefix = "> "
 		}
-		preview.WriteString(fmt.Sprintf("%s%4d: %s\n", prefix, i+1, lineText))
+		fmt.Fprintf(&preview, "%s%4d: %s\n", prefix, i+1, lineText)
 	}
 
 	return preview.String()
