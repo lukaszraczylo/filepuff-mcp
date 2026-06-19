@@ -394,7 +394,9 @@ func (s *Searcher) FormatResultsWithOptions(results *SearchResults, opts FormatO
 			fmt.Fprintf(&sb, " (truncated, total: %d)", results.Total)
 		}
 		sb.WriteString(":\n\n")
-	} else if results.Truncated {
+	} else if results.Truncated && opts.CursorLine == "" {
+		// When a cursor footer is present it already reports the remaining count,
+		// so the prose truncation line would be redundant.
 		fmt.Fprintf(&sb, "(truncated, showing subset of %d total matches)\n\n", results.Total)
 	}
 
