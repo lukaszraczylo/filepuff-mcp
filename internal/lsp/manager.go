@@ -358,17 +358,55 @@ func (m *Manager) Definition(ctx context.Context, file string, line, col int) ([
 		return nil, nil
 	}
 
-	// Result can be Location, []Location, or []LocationLink
-	var locations []Location
-	if err := json.Unmarshal(resp.Result, &locations); err != nil {
-		// Try single location
-		var single Location
-		if err := json.Unmarshal(resp.Result, &single); err == nil {
-			locations = []Location{single}
+	return parseDefinitionResult(resp.Result)
+}
+
+// parseDefinitionResult decodes a textDocument/definition result. Per LSP the
+// result may be Location, Location[], LocationLink, or LocationLink[]. Because
+// we advertise LinkSupport (see initialize), servers such as gopls and
+// rust-analyzer return the LocationLink shape (targetUri/targetRange). A naive
+// unmarshal into []Location silently succeeds with zero-value URIs/ranges, so
+// decode into a unified shape that captures both and normalize to Location.
+func parseDefinitionResult(raw json.RawMessage) ([]Location, error) {
+	// locOrLink captures both the Location (uri/range) and LocationLink
+	// (targetUri/targetRange) field sets; whichever is populated wins.
+	type locOrLink struct {
+		URI         string `json:"uri"`
+		Range       Range  `json:"range"`
+		TargetURI   string `json:"targetUri"`
+		TargetRange Range  `json:"targetRange"`
+	}
+	toLocation := func(l locOrLink) (Location, bool) {
+		if l.URI != "" {
+			return Location{URI: l.URI, Range: l.Range}, true
 		}
+		if l.TargetURI != "" {
+			return Location{URI: l.TargetURI, Range: l.TargetRange}, true
+		}
+		return Location{}, false
 	}
 
-	return locations, nil
+	// Array form (Location[] or LocationLink[]).
+	var arr []locOrLink
+	if err := json.Unmarshal(raw, &arr); err == nil {
+		locations := make([]Location, 0, len(arr))
+		for _, l := range arr {
+			if loc, ok := toLocation(l); ok {
+				locations = append(locations, loc)
+			}
+		}
+		return locations, nil
+	}
+
+	// Single object form (Location or LocationLink).
+	var single locOrLink
+	if err := json.Unmarshal(raw, &single); err != nil {
+		return nil, fmt.Errorf("failed to parse definition result: %w", err)
+	}
+	if loc, ok := toLocation(single); ok {
+		return []Location{loc}, nil
+	}
+	return nil, nil
 }
 
 // References finds all references to the symbol at the given position.
