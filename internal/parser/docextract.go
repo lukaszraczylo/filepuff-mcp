@@ -3,6 +3,7 @@ package parser
 
 import (
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/lukaszraczylo/mcp-filepuff/pkg/protocol"
@@ -530,10 +531,15 @@ func FormatDocComment(doc *DocComment) string {
 			written[t] = true
 		}
 
-		for tagName, val := range doc.Tags {
+		remaining := make([]string, 0, len(doc.Tags))
+		for tagName := range doc.Tags {
 			if !written[tagName] {
-				sb.WriteString("@" + tagName + " " + val + "\n")
+				remaining = append(remaining, tagName)
 			}
+		}
+		sort.Strings(remaining) // deterministic output (map order is random)
+		for _, tagName := range remaining {
+			sb.WriteString("@" + tagName + " " + doc.Tags[tagName] + "\n")
 		}
 	}
 
