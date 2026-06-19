@@ -125,6 +125,52 @@ var globalVar = "test"
 
 // Grouped var/const specs declare multiple names on one spec (var a, b = 1, 2);
 // every name must surface as its own symbol, not just the first.
+// Function-local var/const declarations must NOT appear as top-level symbols
+// (they flood the list and aren't package/module symbols).
+func TestExtractSymbolsExcludesLocals(t *testing.T) {
+	r := NewRegistry()
+	defer r.Close()
+	ctx := context.Background()
+
+	t.Run("go", func(t *testing.T) {
+		content := "package main\n\nvar TopLevel = 1\n\nfunc f() {\n\tvar localVar = 2\n\tconst localConst = 3\n\t_ = localVar\n\t_ = localConst\n}\n"
+		result, err := r.Parse(ctx, "m.go", []byte(content))
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		names := symbolNameSet(ExtractSymbols(result.Tree, []byte(content), protocol.LangGo, "m.go"))
+		if !names["TopLevel"] {
+			t.Errorf("expected TopLevel symbol, got %v", names)
+		}
+		if names["localVar"] || names["localConst"] {
+			t.Errorf("function-local var/const leaked into symbols: %v", names)
+		}
+	})
+
+	t.Run("js exported and module consts kept, locals dropped", func(t *testing.T) {
+		content := "export const Exported = 1;\nconst ModuleConst = 2;\nfunction f() {\n  const localOne = 3;\n  return localOne;\n}\n"
+		result, err := r.Parse(ctx, "m.js", []byte(content))
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		names := symbolNameSet(ExtractSymbols(result.Tree, []byte(content), protocol.LangJavaScript, "m.js"))
+		if !names["Exported"] || !names["ModuleConst"] {
+			t.Errorf("expected Exported and ModuleConst symbols, got %v", names)
+		}
+		if names["localOne"] {
+			t.Errorf("function-local const leaked into symbols: %v", names)
+		}
+	})
+}
+
+func symbolNameSet(syms []protocol.Symbol) map[string]bool {
+	m := make(map[string]bool, len(syms))
+	for _, s := range syms {
+		m[s.Name] = true
+	}
+	return m
+}
+
 // An Elixir defstruct must be named after its enclosing module (%Mod{}),
 // not the useless literal "defstruct".
 func TestExtractElixirStructNamedByModule(t *testing.T) {

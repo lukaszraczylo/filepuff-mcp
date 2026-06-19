@@ -35,6 +35,28 @@ func ExtractSymbols(tree *sitter.Tree, content []byte, lang protocol.Language, f
 }
 
 // extractGoSymbols extracts symbols from Go code.
+// goBodyTypes are the node types whose descendants are function-local (not
+// package-level) declarations in Go.
+var goBodyTypes = map[string]bool{"block": true, "func_literal": true}
+
+// jsBodyTypes are the node types whose descendants are function-local (not
+// module/class-member) declarations in JS/TS.
+var jsBodyTypes = map[string]bool{
+	"statement_block": true, "function_declaration": true, "method_definition": true,
+	"arrow_function": true, "function_expression": true, "generator_function_declaration": true,
+}
+
+// isNestedInBody reports whether n has an ancestor in bodyTypes, i.e. it is a
+// function-local declaration rather than a top-level/module one.
+func isNestedInBody(n *sitter.Node, bodyTypes map[string]bool) bool {
+	for p := n.Parent(); p != nil; p = p.Parent() {
+		if bodyTypes[p.Type()] {
+			return true
+		}
+	}
+	return false
+}
+
 func extractGoSymbols(root *sitter.Node, content []byte, filename string) []protocol.Symbol {
 	var symbols []protocol.Symbol
 
@@ -49,6 +71,10 @@ func extractGoSymbols(root *sitter.Node, content []byte, filename string) []prot
 		case "type_declaration":
 			symbol = extractGoType(n, content, filename)
 		case "const_declaration", "var_declaration":
+			// Skip function-local var/const; only package-level ones are symbols.
+			if isNestedInBody(n, goBodyTypes) {
+				return true
+			}
 			syms := extractGoVarConst(n, content, filename)
 			symbols = append(symbols, syms...)
 			return true
@@ -190,6 +216,11 @@ func extractJSSymbols(root *sitter.Node, content []byte, filename string) []prot
 		case "method_definition":
 			symbol = extractJSMethod(n, content, filename)
 		case "lexical_declaration", "variable_declaration":
+			// Skip function-local let/const/var; only module/top-level ones
+			// (including `export const`) are symbols.
+			if isNestedInBody(n, jsBodyTypes) {
+				return true
+			}
 			syms := extractJSVariable(n, content, filename)
 			symbols = append(symbols, syms...)
 			return true
