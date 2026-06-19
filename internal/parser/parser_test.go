@@ -172,6 +172,43 @@ func TestParseWithSyntaxErrors(t *testing.T) {
 	}
 }
 
+// TestParseCachedErrorsMatch verifies that the syntax errors returned on a
+// cache hit are identical to those computed on the initial parse. Errors are
+// cached alongside the tree (they are a pure function of the tree), so the hot
+// cache-hit path must not lose or alter them.
+func TestParseCachedErrorsMatch(t *testing.T) {
+	r := NewRegistry()
+	defer r.Close()
+
+	content := []byte("package main\n\nfunc main( {}\n") // missing closing paren
+	ctx := context.Background()
+
+	first, err := r.Parse(ctx, "test.go", content)
+	if err != nil {
+		t.Fatalf("first parse failed: %v", err)
+	}
+	if len(first.Errors) == 0 {
+		t.Fatal("expected syntax errors on first parse")
+	}
+
+	second, err := r.Parse(ctx, "test.go", content)
+	if err != nil {
+		t.Fatalf("cached parse failed: %v", err)
+	}
+	if second.Tree != first.Tree {
+		t.Fatal("expected cache hit (same tree pointer)")
+	}
+
+	if len(second.Errors) != len(first.Errors) {
+		t.Fatalf("cached errors count = %d, want %d", len(second.Errors), len(first.Errors))
+	}
+	for i := range first.Errors {
+		if second.Errors[i] != first.Errors[i] {
+			t.Errorf("cached error[%d] = %+v, want %+v", i, second.Errors[i], first.Errors[i])
+		}
+	}
+}
+
 func TestIsBinary(t *testing.T) {
 	tests := []struct {
 		name    string

@@ -48,10 +48,13 @@ type Registry struct {
 }
 
 // CachedTree stores a parsed tree with its metadata.
-// Content is not stored to reduce memory usage.
+// Content is not stored to reduce memory usage. Syntax errors are a pure
+// function of the tree (extractErrors ignores content), so they are cached
+// alongside it to avoid re-walking the whole tree on every cache hit.
 type CachedTree struct {
 	Tree     *sitter.Tree
 	Language protocol.Language
+	Errors   []SyntaxError
 }
 
 // ParseResult contains the result of parsing a file.
@@ -202,11 +205,10 @@ func (r *Registry) Parse(ctx context.Context, filename string, content []byte) (
 	hash := fmt.Sprintf("%s:%016x", string(lang), xxhash.Sum64(content))
 	if cached, ok := r.cache.Get(hash); ok && cached.Language == lang {
 		r.cacheHits.Add(1)
-		errors := extractErrors(cached.Tree.RootNode(), content)
 		return &ParseResult{
 			Tree:     cached.Tree,
 			Language: lang,
-			Errors:   errors,
+			Errors:   cached.Errors,
 			Content:  content,
 		}, nil
 	}
@@ -242,10 +244,12 @@ func (r *Registry) Parse(ctx context.Context, filename string, content []byte) (
 	// Extract syntax errors
 	errors := extractErrors(tree.RootNode(), content)
 
-	// Cache result (LRU cache handles eviction automatically)
+	// Cache result (LRU cache handles eviction automatically).
+	// Errors are cached so cache hits skip a full tree walk.
 	r.cache.Add(hash, &CachedTree{
 		Tree:     tree,
 		Language: lang,
+		Errors:   errors,
 	})
 
 	return &ParseResult{
