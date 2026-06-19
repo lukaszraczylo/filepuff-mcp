@@ -321,7 +321,14 @@ func (c *Client) readLoop() {
 		if err := json.Unmarshal(body, &resp); err == nil && resp.ID != 0 {
 			c.mu.Lock()
 			if ch, ok := c.pending[resp.ID]; ok {
-				ch <- &resp
+				// Non-blocking send: the pending channel is buffered(1) and read
+				// exactly once. A misbehaving server that sends a duplicate
+				// response for the same id must not block here while holding c.mu
+				// (which would deadlock all future dispatches).
+				select {
+				case ch <- &resp:
+				default:
+				}
 			}
 			c.mu.Unlock()
 			continue
