@@ -61,7 +61,10 @@ func (s *Server) handleFileSearch(ctx context.Context, request mcp.CallToolReque
 		prefsMaxResults = prefs.DefaultMaxResults
 		prefsCluster = prefs.DefaultCluster
 	}
-	maxResults := effectiveInt(request, "max_results", prefsMaxResults, 0)
+	// Default to the configured cap (not 0/unbounded) so a broad pattern can't
+	// flood memory and the context window; an explicit max_results still wins,
+	// and the cursor footer lets the caller page through the rest.
+	maxResults := effectiveInt(request, "max_results", prefsMaxResults, s.cfg.MaxSearchResults)
 	cluster := effectiveBool(request, "cluster", prefsCluster, false)
 
 	cursorStr := request.GetString("cursor", "")
@@ -97,13 +100,14 @@ func (s *Server) handleFileSearch(ctx context.Context, request mcp.CallToolReque
 	}
 
 	req := &search.Request{
-		Pattern:      pattern,
-		Paths:        paths,
-		FileTypes:    fileTypes,
-		IgnoreCase:   ignoreCase,
-		Regex:        regex,
-		ContextLines: contextLines,
-		MaxResults:   rgMaxResults,
+		Pattern:       pattern,
+		Paths:         paths,
+		FileTypes:     fileTypes,
+		IgnoreCase:    ignoreCase,
+		Regex:         regex,
+		ContextLines:  contextLines,
+		MaxResults:    rgMaxResults,
+		IncludeHidden: request.GetBool("include_hidden", false),
 	}
 
 	results, err := s.searcher.Search(ctx, req)
