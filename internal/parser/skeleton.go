@@ -36,22 +36,21 @@ func SkeletonFile(ctx context.Context, reg *Registry, filename string, content [
 	default:
 		// TODO: skeleton for c, cpp, elixir, html, vue — fall back to symbols_only
 		syms := ExtractSymbols(result.Tree, content, lang, filename)
-		return renderSymbolsOnly(syms, filename, lang, content), false, nil
+		return renderSymbolsOnly(syms, lang), false, nil
 	}
 }
 
 // renderSymbolsOnly renders a simple symbol list (fallback for unsupported languages).
-func renderSymbolsOnly(syms []protocol.Symbol, _ string, lang protocol.Language, content []byte) string {
-	lines := strings.Split(string(content), "\n")
+// It deliberately does not fabricate "<source line> { ... }" output: the raw start
+// line plus a guessed brace is wrong for brace-less languages (e.g. Elixir's "def f do",
+// HTML) and only wastes tokens. The symbol list (kind, name, line, doc) is accurate.
+func renderSymbolsOnly(syms []protocol.Symbol, lang protocol.Language) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "// skeleton unavailable for %s — symbol list only\n", lang)
 	for _, s := range syms {
 		fmt.Fprintf(&sb, "// %s %s  (line %d)\n", s.Kind, s.Name, s.Location.Line)
 		if s.Doc != "" {
 			fmt.Fprintf(&sb, "// doc: %s\n", s.Doc)
-		}
-		if s.Location.Line >= 1 && s.Location.Line <= len(lines) {
-			sb.WriteString(lines[s.Location.Line-1] + " { ... }\n")
 		}
 	}
 	return sb.String()
