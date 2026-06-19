@@ -1,6 +1,8 @@
 package parser
 
 import (
+	"strings"
+
 	"github.com/lukaszraczylo/mcp-filepuff/pkg/protocol"
 	sitter "github.com/smacker/go-tree-sitter"
 )
@@ -425,29 +427,65 @@ func extractCSymbols(root *sitter.Node, content []byte, filename string) []proto
 	return symbols
 }
 
+// cDeclaratorName descends the declarator field-chain (pointer/reference/array/
+// function declarators) to the innermost name node and returns its text. Unlike a
+// first-identifier scan, this returns the function/method NAME (not a parameter)
+// and handles C++ method names (field_identifier), out-of-line definitions
+// (qualified_identifier like User::foo), destructors and operators.
+func cDeclaratorName(declarator *sitter.Node, content []byte) string {
+	node := declarator
+	for node != nil {
+		switch node.Type() {
+		case "identifier", "field_identifier", "qualified_identifier",
+			"destructor_name", "operator_name":
+			return GetNodeText(node, content)
+		}
+		next := node.ChildByFieldName("declarator")
+		if next == nil {
+			return ""
+		}
+		node = next
+	}
+	return ""
+}
+
+// enclosingCppClassName returns the name of the nearest class/struct ancestor of
+// n (for qualifying in-class method names), or "" if n is not inside one.
+func enclosingCppClassName(n *sitter.Node, content []byte) string {
+	for p := n.Parent(); p != nil; p = p.Parent() {
+		if p.Type() == "class_specifier" || p.Type() == "struct_specifier" {
+			if name := p.ChildByFieldName("name"); name != nil {
+				return GetNodeText(name, content)
+			}
+		}
+	}
+	return ""
+}
+
 func extractCFunction(n *sitter.Node, content []byte, filename string) *protocol.Symbol {
 	declarator := n.ChildByFieldName("declarator")
 	if declarator == nil {
 		return nil
 	}
 
-	// Find the function name within the declarator
-	var name string
-	WalkTree(declarator, func(node *sitter.Node) bool {
-		if node.Type() == "identifier" {
-			name = GetNodeText(node, content)
-			return false
-		}
-		return true
-	})
-
+	name := cDeclaratorName(declarator, content)
 	if name == "" {
 		return nil
 	}
 
+	// In-class definitions are methods; qualify the name with the class. Out-of-line
+	// definitions already carry a qualified name (Class::method).
+	kind := protocol.SymbolFunction
+	if cls := enclosingCppClassName(n, content); cls != "" {
+		kind = protocol.SymbolMethod
+		name = cls + "::" + name
+	} else if strings.Contains(name, "::") {
+		kind = protocol.SymbolMethod
+	}
+
 	return &protocol.Symbol{
 		Name:     name,
-		Kind:     protocol.SymbolFunction,
+		Kind:     kind,
 		Location: NodeLocation(n, filename),
 	}
 }
@@ -484,22 +522,22 @@ func extractCFunctionDecl(n *sitter.Node, content []byte, filename string) *prot
 		return nil
 	}
 
-	var name string
-	WalkTree(declarator, func(node *sitter.Node) bool {
-		if node.Type() == "identifier" {
-			name = GetNodeText(node, content)
-			return false
-		}
-		return true
-	})
-
+	name := cDeclaratorName(declarator, content)
 	if name == "" {
 		return nil
 	}
 
+	kind := protocol.SymbolFunction
+	if cls := enclosingCppClassName(n, content); cls != "" {
+		kind = protocol.SymbolMethod
+		name = cls + "::" + name
+	} else if strings.Contains(name, "::") {
+		kind = protocol.SymbolMethod
+	}
+
 	return &protocol.Symbol{
 		Name:     name,
-		Kind:     protocol.SymbolFunction,
+		Kind:     kind,
 		Location: NodeLocation(n, filename),
 	}
 }

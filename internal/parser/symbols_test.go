@@ -125,6 +125,36 @@ var globalVar = "test"
 
 // Grouped var/const specs declare multiple names on one spec (var a, b = 1, 2);
 // every name must surface as its own symbol, not just the first.
+// C++ in-class methods must be extracted as methods qualified by their class
+// (Class::method), not misnamed after a parameter or dropped entirely.
+func TestExtractCppMethods(t *testing.T) {
+	r := NewRegistry()
+	defer r.Close()
+	content := "class User {\npublic:\n  void setName(const char* n) { name_ = n; }\n  int id() const { return id_; }\nprivate:\n  const char* name_;\n  int id_;\n};\n\nvoid freeFunc() {}\n"
+	result, err := r.Parse(context.Background(), "u.cpp", []byte(content))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	syms := ExtractSymbols(result.Tree, []byte(content), protocol.LangCpp, "u.cpp")
+
+	kindByName := make(map[string]protocol.SymbolKind, len(syms))
+	for _, s := range syms {
+		kindByName[s.Name] = s.Kind
+	}
+	if kindByName["User::setName"] != protocol.SymbolMethod {
+		t.Errorf("setName: want method User::setName, got %v", kindByName)
+	}
+	if kindByName["User::id"] != protocol.SymbolMethod {
+		t.Errorf("id: want method User::id, got %v", kindByName)
+	}
+	if kindByName["freeFunc"] != protocol.SymbolFunction {
+		t.Errorf("freeFunc: want function, got %v", kindByName)
+	}
+	if _, leaked := kindByName["n"]; leaked {
+		t.Errorf("parameter 'n' leaked as a symbol: %v", kindByName)
+	}
+}
+
 // Function-local var/const declarations must NOT appear as top-level symbols
 // (they flood the list and aren't package/module symbols).
 func TestExtractSymbolsExcludesLocals(t *testing.T) {
