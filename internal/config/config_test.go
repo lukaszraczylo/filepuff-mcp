@@ -183,6 +183,35 @@ func TestLoadWithConfigFile(t *testing.T) {
 	}
 }
 
+// A config file requesting excessive size/count limits must be clamped so it
+// cannot force the server into unbounded memory use.
+func TestLoadClampsExcessiveLimits(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, ".mcp-filepuff.json")
+	configContent := `{
+		"max_file_size": 999999999999,
+		"max_parse_size": 999999999999,
+		"max_edit_size": 999999999999,
+		"max_search_results": 999999999
+	}`
+	if err := os.WriteFile(configPath, []byte(configContent), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(tmpDir)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	const maxSize int64 = 100 * 1024 * 1024
+	if cfg.MaxFileSize > maxSize || cfg.MaxParseSize > maxSize || cfg.MaxEditSize > maxSize {
+		t.Errorf("size limits not clamped: file=%d parse=%d edit=%d", cfg.MaxFileSize, cfg.MaxParseSize, cfg.MaxEditSize)
+	}
+	if cfg.MaxSearchResults > 100000 {
+		t.Errorf("MaxSearchResults not clamped: %d", cfg.MaxSearchResults)
+	}
+}
+
 // TestValidate tests the Validate method with various inputs.
 func TestValidate(t *testing.T) {
 	tests := []struct {

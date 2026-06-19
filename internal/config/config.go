@@ -84,13 +84,23 @@ func Load(workspaceRoot string) (*Config, error) {
 	// Restore WorkspaceRoot — config file must not override path guards.
 	cfg.WorkspaceRoot = savedRoot
 
-	// Clamp size limits to prevent config file from requesting excessive memory.
+	// Clamp size/count limits so the config file cannot request excessive memory.
 	const maxAllowedSize int64 = 100 * 1024 * 1024 // 100 MB
+	const maxAllowedSearchResults = 100000
 	if cfg.MaxFileSize > maxAllowedSize {
 		cfg.MaxFileSize = maxAllowedSize
 	}
 	if cfg.MaxParseSize > maxAllowedSize {
 		cfg.MaxParseSize = maxAllowedSize
+	}
+	if cfg.MaxEditSize > maxAllowedSize {
+		cfg.MaxEditSize = maxAllowedSize
+	}
+	if cfg.MaxSearchResults > maxAllowedSearchResults {
+		cfg.MaxSearchResults = maxAllowedSearchResults
+	}
+	if cfg.MaxSearchResults < 0 {
+		cfg.MaxSearchResults = 0 // negative would re-enable unbounded search
 	}
 
 	// Override from environment variables
