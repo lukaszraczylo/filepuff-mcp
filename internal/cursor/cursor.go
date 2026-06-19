@@ -26,6 +26,8 @@ type payload struct {
 // Encode creates an opaque cursor string from an offset and query hash.
 func Encode(offset int, queryHash string) string {
 	p := payload{Offset: offset, QueryHash: queryHash}
+	// Marshalling a struct of two scalar fields (int, string) cannot fail, so the
+	// error is intentionally ignored.
 	b, _ := json.Marshal(p)
 	return base64.RawURLEncoding.EncodeToString(b)
 }
