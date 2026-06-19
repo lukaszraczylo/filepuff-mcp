@@ -919,11 +919,15 @@ func kindMatchesNode(kind protocol.SymbolKind, nodeType string) bool {
 }
 
 // SymbolCandidate is one symbol matching a name (and optional kind) lookup,
-// with its declaration node type and 1-indexed inclusive line range.
+// with its declaration node type and 1-indexed inclusive line range. NameLine
+// and NameColumn point at the name identifier itself (1-indexed), which is the
+// position LSP queries (hover/definition/references) expect.
 type SymbolCandidate struct {
-	NodeType  string
-	StartLine int
-	EndLine   int
+	NodeType   string
+	StartLine  int
+	EndLine    int
+	NameLine   int
+	NameColumn int
 }
 
 // symbolDeclNodeTypes is the set of declaration node types FindSymbolCandidates
@@ -959,10 +963,13 @@ func FindSymbolCandidates(tree *sitter.Tree, content []byte, filename, symbolNam
 			return true // kind mismatch, keep searching
 		}
 		r := NodeRange(n, filename)
+		nameLoc := NodeLocation(nameNode, filename)
 		candidates = append(candidates, SymbolCandidate{
-			NodeType:  n.Type(),
-			StartLine: r.Start.Line,
-			EndLine:   r.End.Line,
+			NodeType:   n.Type(),
+			StartLine:  r.Start.Line,
+			EndLine:    r.End.Line,
+			NameLine:   nameLoc.Line,
+			NameColumn: nameLoc.Column,
 		})
 		return true
 	})

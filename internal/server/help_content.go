@@ -88,9 +88,17 @@ const helpASTQuery = "# ast_query — flags and examples\n\n" +
 	"| `$NAME` | Matches a single node, captures as `$NAME` |\n" +
 	"| `$$$ARGS` | Matches zero or more nodes (variadic capture) |\n" +
 	"| `$_` | Wildcard — matches any single node, no capture |\n\n" +
+	"## Matching semantics (important)\n\n" +
+	"Matching is keyword- and kind-based, not full structural matching. The leading keyword " +
+	"(`func`/`function`/`class`/`struct`/`interface`) plus placeholders select the node KIND; " +
+	"argument shapes, return types, and the literal bound to `$NAME` are NOT enforced as filters. " +
+	"So `func $NAME($$$ARGS) error` matches every function/method, not only those returning `error`. " +
+	"Captured `$VAR` values appear in output but do not constrain which nodes match.\n\n" +
+	"For precise selection, combine the pattern with `name_exact`, `name_matches`, and/or `kind_in` — " +
+	"these ARE applied as filters.\n\n" +
 	"## Examples\n\n" +
 	"```json\n" +
-	"// All Go functions returning error\n" +
+	"// All Go functions/methods (the 'error' return is NOT enforced — add name_/kind_in to narrow)\n" +
 	`{"pattern": "func $NAME($$$ARGS) error", "language": "go"}` + "\n\n" +
 	"// Python classes\n" +
 	`{"pattern": "class $NAME: $$$BODY", "language": "python"}` + "\n\n" +
@@ -114,10 +122,16 @@ const helpLSPQuery = "# lsp_query — flags and examples\n\n" +
 	"- `compact=true` — collapse to one line per file\n" +
 	"- `verbose=true` — add `Found N reference(s):` header\n\n" +
 	"Note: `include_declaration` and `compact` are errors when used with actions other than `references`.\n\n" +
+	"## Position: line+column or symbol_name\n\n" +
+	"Give the position directly with `line`+`column`, or pass `symbol_name` (optionally `symbol_kind`) to " +
+	"resolve it from the AST — handy when you know the name but not the coordinates. Ambiguous or unknown " +
+	"names return an error (with candidates / a 'did you mean' hint).\n\n" +
 	"## Examples\n\n" +
 	"```json\n" +
 	"// Hover — type/doc at position\n" +
 	`{"action": "hover", "file": "server.go", "line": 45, "column": 6}` + "\n\n" +
+	"// Definition by symbol name — no line/column needed\n" +
+	`{"action": "definition", "file": "server.go", "symbol_name": "NewServer"}` + "\n\n" +
 	"// Definition — where is this symbol defined?\n" +
 	`{"action": "definition", "file": "handler.go", "line": 23, "column": 10}` + "\n\n" +
 	"// References — all usages\n" +

@@ -222,6 +222,7 @@ func (s *Server) registerTools() {
 	s.mcp.AddTool(
 		mcp.NewTool("ast_query",
 			mcp.WithDescription("Search for AST patterns in code files. Use code patterns with $VAR placeholders to match and capture code structures like functions, classes, and types. "+
+				"Matching is keyword/kind-based, not fully structural: argument and return-type constraints in the pattern are not enforced — use name_exact/name_matches/kind_in to filter precisely. "+
 				"See resource filepuff://help/ast_query for flags and examples."),
 			mcp.WithReadOnlyHintAnnotation(true),
 			mcp.WithString("pattern",
@@ -266,7 +267,8 @@ func (s *Server) registerTools() {
 	if s.lspManager != nil {
 		s.mcp.AddTool(
 			mcp.NewTool("lsp_query",
-				mcp.WithDescription("Query LSP for symbol info, definition, or references at a specific file position. "+
+				mcp.WithDescription("Query LSP for symbol info, definition, or references at a file position. "+
+					"Give the position as line+column, or pass symbol_name to resolve it via AST (no line/column needed). "+
 					"See resource filepuff://help/lsp_query for flags and examples."),
 				mcp.WithReadOnlyHintAnnotation(true),
 				mcp.WithString("action",
@@ -277,13 +279,17 @@ func (s *Server) registerTools() {
 					mcp.Required(),
 					mcp.Description("Path to the file"),
 				),
+				mcp.WithString("symbol_name",
+					mcp.Description("Resolve the position from a named symbol (function, struct, class, etc.) instead of line+column. Errors if the name is ambiguous or not found."),
+				),
+				mcp.WithString("symbol_kind",
+					mcp.Description("Disambiguate symbol_name by kind when multiple symbols share the name. Accepted: function, method, struct, class, interface, type, enum, trait, constant, module."),
+				),
 				mcp.WithNumber("line",
-					mcp.Required(),
-					mcp.Description("Line number (1-indexed)"),
+					mcp.Description("Line number (1-indexed). Required unless symbol_name is given."),
 				),
 				mcp.WithNumber("column",
-					mcp.Required(),
-					mcp.Description("Column number (1-indexed)"),
+					mcp.Description("Column number (1-indexed). Required unless symbol_name is given."),
 				),
 				mcp.WithBoolean("include_declaration",
 					mcp.Description("Include the declaration in results. Only valid for action=references (default: true)."),

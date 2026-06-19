@@ -10,6 +10,7 @@ import (
 	"github.com/lukaszraczylo/mcp-filepuff/internal/lsp"
 	"github.com/lukaszraczylo/mcp-filepuff/internal/parser"
 	"github.com/lukaszraczylo/mcp-filepuff/pkg/errors"
+	"github.com/lukaszraczylo/mcp-filepuff/pkg/protocol"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -26,18 +27,28 @@ func (s *Server) handleLSPQuery(ctx context.Context, request mcp.CallToolRequest
 		return mcp.NewToolResultError("file is required"), nil
 	}
 
-	line := request.GetInt("line", 0)
-	if line <= 0 {
-		return mcp.NewToolResultError("line must be positive"), nil
-	}
-
-	col := request.GetInt("column", 0)
-	if col <= 0 {
-		return mcp.NewToolResultError("column must be positive"), nil
-	}
-
 	if !s.cfg.IsPathAllowed(file) {
 		return mcp.NewToolResultError("file is outside workspace root"), nil
+	}
+
+	// Position can be given directly (line+column) or resolved from a symbol name.
+	var line, col int
+	if symbolName := request.GetString("symbol_name", ""); symbolName != "" {
+		symbolKind := protocol.SymbolKind(request.GetString("symbol_kind", ""))
+		resolvedLine, resolvedCol, errResult := s.resolveLSPSymbolPosition(ctx, file, symbolName, symbolKind)
+		if errResult != nil {
+			return errResult, nil
+		}
+		line, col = resolvedLine, resolvedCol
+	} else {
+		line = request.GetInt("line", 0)
+		if line <= 0 {
+			return mcp.NewToolResultError("line must be positive (or provide symbol_name)"), nil
+		}
+		col = request.GetInt("column", 0)
+		if col <= 0 {
+			return mcp.NewToolResultError("column must be positive (or provide symbol_name)"), nil
+		}
 	}
 
 	verbose := request.GetBool("verbose", false)
@@ -73,6 +84,31 @@ func (s *Server) handleLSPQuery(ctx context.Context, request mcp.CallToolRequest
 
 	default:
 		return mcp.NewToolResultError(fmt.Sprintf("unknown action %q: must be hover | definition | references", action)), nil
+	}
+}
+
+// resolveLSPSymbolPosition resolves a symbol name to the 1-indexed line:column of
+// its name identifier, for use as an LSP position. Returns an error result when the
+// file can't be read/parsed, the symbol is not found (with a "did you mean" hint),
+// or the name is ambiguous (listing candidates).
+func (s *Server) resolveLSPSymbolPosition(ctx context.Context, file, symbolName string, symbolKind protocol.SymbolKind) (line, col int, errResult *mcp.CallToolResult) {
+	content, err := os.ReadFile(file)
+	if err != nil {
+		return 0, 0, mcp.NewToolResultError(fmt.Sprintf("failed to read file: %s", errors.SanitizeError(err)))
+	}
+	result, err := s.parser.Parse(ctx, file, content)
+	if err != nil {
+		return 0, 0, mcp.NewToolResultError(fmt.Sprintf("failed to parse file: %s", errors.SanitizeError(err)))
+	}
+	candidates := parser.FindSymbolCandidates(result.Tree, content, file, symbolName, symbolKind)
+	switch len(candidates) {
+	case 0:
+		return 0, 0, mcp.NewToolResultError(fmt.Sprintf("symbol %q not found in %s%s", symbolName, file, s.nearestSymbolSuggestion(ctx, file, content, symbolName)))
+	case 1:
+		return candidates[0].NameLine, candidates[0].NameColumn, nil
+	default:
+		return 0, 0, mcp.NewToolResultError(fmt.Sprintf("symbol %q is ambiguous in %s (%d matches): %s — disambiguate with symbol_kind, or pass line+column",
+			symbolName, file, len(candidates), formatSymbolCandidates(candidates)))
 	}
 }
 

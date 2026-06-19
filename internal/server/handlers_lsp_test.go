@@ -1,11 +1,24 @@
 package server
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"github.com/lukaszraczylo/mcp-filepuff/internal/lsp"
+	"github.com/mark3labs/mcp-go/mcp"
 )
+
+// errorText extracts the text payload from an error CallToolResult.
+func errorText(res *mcp.CallToolResult) string {
+	if res == nil || len(res.Content) == 0 {
+		return ""
+	}
+	if tc, ok := res.Content[0].(mcp.TextContent); ok {
+		return tc.Text
+	}
+	return ""
+}
 
 // makeLocation builds an lsp.Location with a file:// URI.
 func makeLocation(file string, line, col int) lsp.Location {
@@ -178,4 +191,54 @@ func TestFormatReferencesVerbosePreservesLPrefix(t *testing.T) {
 	if !strings.Contains(out, "L3:4") {
 		t.Errorf("verbose output must contain L3:4, got:\n%s", out)
 	}
+}
+
+// resolveLSPSymbolPosition underpins lsp_query's symbol_name affordance: it maps
+// a symbol name to the line:column of its name identifier, or returns an error
+// result for not-found / ambiguous names. It does not require a running LSP.
+func TestResolveLSPSymbolPosition(t *testing.T) {
+	tmpDir := t.TempDir()
+	srv := newTestServer(t, tmpDir)
+
+	goSrc := "package main\n" + // 1
+		"\n" + // 2
+		"type A struct{}\n" + // 3
+		"func (a A) Run() {}\n" + // 4
+		"\n" + // 5
+		"type B struct{}\n" + // 6
+		"func (b B) Run() {}\n" + // 7
+		"\n" + // 8
+		"func Unique() {}\n" // 9
+	f := writeFile(t, tmpDir, "main.go", goSrc)
+	ctx := context.Background()
+
+	t.Run("unique symbol resolves to its name position", func(t *testing.T) {
+		line, col, errRes := srv.resolveLSPSymbolPosition(ctx, f, "Unique", "")
+		if errRes != nil {
+			t.Fatalf("unexpected error result for Unique: %s", errorText(errRes))
+		}
+		if line != 9 || col != 6 {
+			t.Errorf("Unique position = %d:%d, want 9:6", line, col)
+		}
+	})
+
+	t.Run("ambiguous symbol errors", func(t *testing.T) {
+		_, _, errRes := srv.resolveLSPSymbolPosition(ctx, f, "Run", "")
+		if errRes == nil {
+			t.Fatal("expected ambiguity error for Run")
+		}
+		if !strings.Contains(errorText(errRes), "ambiguous") {
+			t.Errorf("expected 'ambiguous' in error, got: %s", errorText(errRes))
+		}
+	})
+
+	t.Run("missing symbol errors", func(t *testing.T) {
+		_, _, errRes := srv.resolveLSPSymbolPosition(ctx, f, "Nope", "")
+		if errRes == nil {
+			t.Fatal("expected not-found error for Nope")
+		}
+		if !strings.Contains(errorText(errRes), "not found") {
+			t.Errorf("expected 'not found' in error, got: %s", errorText(errRes))
+		}
+	})
 }
