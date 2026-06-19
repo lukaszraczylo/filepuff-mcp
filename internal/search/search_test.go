@@ -8,9 +8,26 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/lukaszraczylo/mcp-filepuff/internal/config"
 )
+
+// truncateLine must back off to a rune boundary so multibyte characters are
+// never split into invalid UTF-8.
+func TestTruncateLineRuneSafe(t *testing.T) {
+	s := strings.Repeat("é", 200) // 2 bytes each → 400 bytes
+	out := truncateLine(s, 50)
+	if !utf8.ValidString(out) {
+		t.Errorf("truncated output is not valid UTF-8: %q", out)
+	}
+	if !strings.HasSuffix(out, "...") {
+		t.Errorf("expected ellipsis suffix, got %q", out)
+	}
+	if got := truncateLine("hi", 50); got != "hi" {
+		t.Errorf("short string should be unchanged, got %q", got)
+	}
+}
 
 func TestNew(t *testing.T) {
 	cfg := config.Default()

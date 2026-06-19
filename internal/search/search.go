@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	json "github.com/goccy/go-json"
 	"github.com/lukaszraczylo/mcp-filepuff/internal/config"
@@ -488,10 +489,15 @@ func writeClusteredResults(sb *strings.Builder, results []Result) {
 	}
 }
 
-// truncateLine truncates a line if it exceeds maxLen.
+// truncateLine truncates a line if it exceeds maxLen bytes, backing off to a
+// rune boundary so a multibyte character is never split into invalid UTF-8.
 func truncateLine(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
 	}
-	return s[:maxLen-3] + "..."
+	end := max(maxLen-3, 0)
+	for end > 0 && !utf8.RuneStart(s[end]) {
+		end--
+	}
+	return s[:end] + "..."
 }
