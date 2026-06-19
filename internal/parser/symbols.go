@@ -681,15 +681,50 @@ func extractElixirMacro(n *sitter.Node, content []byte, filename string) *protoc
 	}
 }
 
-// extractElixirStruct extracts a struct definition.
+// extractElixirStruct extracts a struct definition. A defstruct has no name of
+// its own — it defines the struct of its enclosing module — so name it after
+// that module (%ModuleName{}) rather than the useless literal "defstruct".
 func extractElixirStruct(n *sitter.Node, content []byte, filename string) *protocol.Symbol {
-	// defstruct is typically inside a module, the struct name is the module name
-	// We just mark this as a struct symbol
+	name := "defstruct"
+	if mod := enclosingElixirModuleName(n, content); mod != "" {
+		name = "%" + mod + "{}"
+	}
 	return &protocol.Symbol{
-		Name:     "defstruct",
+		Name:     name,
 		Kind:     protocol.SymbolStruct,
 		Location: NodeLocation(n, filename),
 	}
+}
+
+// enclosingElixirModuleName walks ancestors of n to the nearest defmodule call
+// and returns its module alias (e.g. "MyApp.User"), or "" if none is found.
+func enclosingElixirModuleName(n *sitter.Node, content []byte) string {
+	for p := n.Parent(); p != nil; p = p.Parent() {
+		if p.Type() != "call" || p.NamedChildCount() < 1 {
+			continue
+		}
+		target := p.NamedChild(0)
+		if target == nil || GetNodeText(target, content) != "defmodule" {
+			continue
+		}
+		args := p.ChildByFieldName("arguments")
+		if args == nil && p.NamedChildCount() >= 2 {
+			args = p.NamedChild(1)
+		}
+		if args == nil {
+			return ""
+		}
+		var moduleName string
+		WalkTree(args, func(node *sitter.Node) bool {
+			if node.Type() == "alias" {
+				moduleName = GetNodeText(node, content)
+				return false
+			}
+			return true
+		})
+		return moduleName
+	}
+	return ""
 }
 
 // extractElixirProtocol extracts a protocol definition.

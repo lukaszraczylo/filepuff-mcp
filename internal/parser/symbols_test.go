@@ -125,6 +125,35 @@ var globalVar = "test"
 
 // Grouped var/const specs declare multiple names on one spec (var a, b = 1, 2);
 // every name must surface as its own symbol, not just the first.
+// An Elixir defstruct must be named after its enclosing module (%Mod{}),
+// not the useless literal "defstruct".
+func TestExtractElixirStructNamedByModule(t *testing.T) {
+	r := NewRegistry()
+	defer r.Close()
+
+	content := "defmodule MyApp.User do\n  defstruct [:name, :email]\nend\n"
+	result, err := r.Parse(context.Background(), "user.ex", []byte(content))
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+
+	symbols := ExtractSymbols(result.Tree, []byte(content), protocol.LangElixir, "user.ex")
+	var structName string
+	found := false
+	for _, s := range symbols {
+		if s.Kind == protocol.SymbolStruct {
+			structName = s.Name
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no struct symbol extracted, got: %+v", symbols)
+	}
+	if structName != "%MyApp.User{}" {
+		t.Errorf("struct name = %q, want %q", structName, "%MyApp.User{}")
+	}
+}
+
 func TestExtractGoVarConstMultiName(t *testing.T) {
 	r := NewRegistry()
 	defer r.Close()
