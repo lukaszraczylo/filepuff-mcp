@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/lukaszraczylo/mcp-filepuff/pkg/protocol"
@@ -45,3 +46,55 @@ func TestStripLicensePythonPreservesSeparatorBlank(t *testing.T) {
 		t.Fatalf("python license strip must keep the blank separator.\nwant: %q\ngot:  %q", want, got.Content)
 	}
 }
+
+// A multi-line TS named import must be removed in full, not just its first line.
+func TestStripTSImportsMultiLine(t *testing.T) {
+	src := "import {\n  a,\n  b,\n} from 'x';\nconst y = 1;\n"
+	got := StripContent(src, []StripFlag{StripImports}, protocol.LangTypeScript)
+	want := "const y = 1;\n"
+	if got.Content != want {
+		t.Fatalf("multi-line import must be fully removed.\nwant: %q\ngot:  %q", want, got.Content)
+	}
+}
+
+// A side-effect import without a semicolon must not consume following code.
+func TestStripTSImportsSideEffectNoRunaway(t *testing.T) {
+	src := "import './setup'\nconst y = 1\n"
+	got := StripContent(src, []StripFlag{StripImports}, protocol.LangTypeScript)
+	want := "const y = 1\n"
+	if got.Content != want {
+		t.Fatalf("side-effect import must not swallow code.\nwant: %q\ngot:  %q", want, got.Content)
+	}
+}
+
+// Blank/underscore/dot/aliased single Go imports must all be stripped.
+func TestStripGoImportsSingleSpecForms(t *testing.T) {
+	src := "package main\n\nimport _ \"embed\"\nimport . \"math\"\nimport m \"strings\"\n\nfunc main() {}\n"
+	got := StripContent(src, []StripFlag{StripImports}, protocol.LangGo)
+	for _, frag := range []string{`"embed"`, `"math"`, `"strings"`} {
+		if containsStr(got.Content, frag) {
+			t.Fatalf("single import %s not stripped, got:\n%s", frag, got.Content)
+		}
+	}
+	if !containsStr(got.Content, "func main") {
+		t.Fatalf("code removed, got:\n%s", got.Content)
+	}
+}
+
+// A Go // line-comment license after build constraints: the license is removed
+// while the build constraint is preserved above it.
+func TestStripLicenseGoLineCommentAfterBuildTag(t *testing.T) {
+	src := "//go:build linux\n\n// Copyright 2024 Acme\n// SPDX-License-Identifier: MIT\n\npackage main\n"
+	got := StripContent(src, []StripFlag{StripLicense}, protocol.LangGo)
+	if containsStr(got.Content, "Copyright") {
+		t.Fatalf("line-comment license not stripped, got:\n%q", got.Content)
+	}
+	if !containsStr(got.Content, "//go:build linux") {
+		t.Fatalf("build constraint must be preserved, got:\n%q", got.Content)
+	}
+	if !containsStr(got.Content, "package main") {
+		t.Fatalf("code removed, got:\n%q", got.Content)
+	}
+}
+
+func containsStr(s, sub string) bool { return strings.Contains(s, sub) }

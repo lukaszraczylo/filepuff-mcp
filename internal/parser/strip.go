@@ -59,25 +59,83 @@ func StripContent(content string, flags []StripFlag, lang protocol.Language) Str
 	return StripResult{Content: content, Stripped: stripped}
 }
 
-// stripLicense removes a leading block comment that looks like a license header.
-// A comment qualifies if it contains "copyright", "license", or "spdx-license-identifier" (case-insensitive).
+// containsLicenseKeyword reports whether lowercased text looks like a license
+// header (contains "copyright", "license", or an SPDX identifier).
+func containsLicenseKeyword(lower string) bool {
+	return strings.Contains(lower, "copyright") ||
+		strings.Contains(lower, "license") ||
+		strings.Contains(lower, "spdx-license-identifier")
+}
+
+// peelLicensePrefix splits off a leading run of lines that must be preserved
+// above a license header: a shebang (#!) on the first line and/or Go
+// build-constraint lines (//go:build, // +build). Returns the preserved prefix
+// (with terminators) and the remaining content. With no such lines, prefix is "".
+func peelLicensePrefix(content string) (prefix, rest string) {
+	lines := strings.SplitAfter(content, "\n")
+	n := 0
+	for n < len(lines) {
+		t := strings.TrimSpace(lines[n])
+		isShebang := n == 0 && strings.HasPrefix(t, "#!")
+		isBuild := strings.HasPrefix(t, "//go:build") || strings.HasPrefix(t, "// +build")
+		if !isShebang && !isBuild {
+			break
+		}
+		n++
+	}
+	if n == 0 {
+		return "", content
+	}
+	return strings.Join(lines[:n], ""), strings.Join(lines[n:], "")
+}
+
+// stripLicense removes a leading license header comment. A comment qualifies if
+// it contains a license keyword (see containsLicenseKeyword). A leading shebang
+// or Go build-constraint block is preserved above the license rather than
+// consumed or blocking detection.
 func stripLicense(content string) (string, bool) {
-	trimmed := strings.TrimLeft(content, " \t\n\r")
+	prefix, rest := peelLicensePrefix(content)
+	next, removed := stripLeadingLicenseComment(rest)
+	if !removed {
+		return content, false
+	}
+	return prefix + next, true
+}
+
+// stripLeadingLicenseComment removes a license header at the top of s, handling
+// C-style /* */ blocks, contiguous // line comments, and contiguous # comments.
+func stripLeadingLicenseComment(s string) (string, bool) {
+	trimmed := strings.TrimLeft(s, " \t\n\r")
 
 	// C-style block comment at top
 	if strings.HasPrefix(trimmed, "/*") {
 		end := strings.Index(trimmed, "*/")
 		if end >= 0 {
 			candidate := trimmed[:end+2]
-			lower := strings.ToLower(candidate)
-			if strings.Contains(lower, "copyright") ||
-				strings.Contains(lower, "license") ||
-				strings.Contains(lower, "spdx-license-identifier") {
+			if containsLicenseKeyword(strings.ToLower(candidate)) {
 				rest := trimmed[end+2:]
 				// Consume trailing newline(s)
 				rest = strings.TrimLeft(rest, "\r\n")
 				return rest, true
 			}
+		}
+	}
+
+	// "//" line-comment header (Go/C/TS). Only contiguous "//" lines belong to
+	// the header; a non-comment line ends it and is preserved.
+	if strings.HasPrefix(trimmed, "//") {
+		lines := strings.Split(trimmed, "\n")
+		var commentLines, rest []string
+		for i, l := range lines {
+			if strings.HasPrefix(strings.TrimSpace(l), "//") {
+				commentLines = append(commentLines, l)
+				continue
+			}
+			rest = lines[i:]
+			break
+		}
+		if containsLicenseKeyword(strings.ToLower(strings.Join(commentLines, "\n"))) {
+			return strings.Join(rest, "\n"), true
 		}
 	}
 
@@ -95,15 +153,12 @@ func stripLicense(content string) (string, bool) {
 			rest = lines[i:]
 			break
 		}
-		lower := strings.ToLower(strings.Join(commentLines, "\n"))
-		if strings.Contains(lower, "copyright") ||
-			strings.Contains(lower, "license") ||
-			strings.Contains(lower, "spdx-license-identifier") {
+		if containsLicenseKeyword(strings.ToLower(strings.Join(commentLines, "\n"))) {
 			return strings.Join(rest, "\n"), true
 		}
 	}
 
-	return content, false
+	return s, false
 }
 
 // stripImports removes top-of-file import blocks, language-specific.
@@ -147,7 +202,10 @@ func stripGoImports(content string) (string, bool) {
 			}
 			continue
 		}
-		if strings.HasPrefix(trimLine, `import "`) || strings.HasPrefix(trimLine, "import `") {
+		// Single import spec in any form: import "path", import `path`,
+		// import alias "path", import _ "path", import . "path".
+		if strings.HasPrefix(trimLine, "import ") &&
+			(strings.Contains(trimLine, `"`) || strings.Contains(trimLine, "`")) {
 			removed = true
 			i++
 			continue
@@ -161,15 +219,45 @@ func stripGoImports(content string) (string, bool) {
 	return strings.Join(out, "\n"), true
 }
 
-// stripTSImports removes TypeScript/JavaScript "import ... from ..." and "require(...)" lines.
+// tsImportNeedsContinuation reports whether an import line (known to start an
+// import) continues onto following lines. A multi-line named import opens a
+// brace and only reaches its module specifier ("from '...'") on a later line.
+func tsImportNeedsContinuation(line string) bool {
+	if strings.Contains(line, "from ") || strings.HasSuffix(line, ";") {
+		return false
+	}
+	// Side-effect import (import '...' / import "...") is single-line.
+	rest := strings.TrimSpace(strings.TrimPrefix(line, "import"))
+	if strings.HasPrefix(rest, "'") || strings.HasPrefix(rest, `"`) {
+		return false
+	}
+	return true
+}
+
+// stripTSImports removes TypeScript/JavaScript "import ... from ..." (including
+// multi-line named imports) and destructured require() lines.
 func stripTSImports(content string) (string, bool) {
 	lines := strings.Split(content, "\n")
 	var out []string
 	removed := false
+	inMulti := false
 	for _, l := range lines {
 		trimLine := strings.TrimSpace(l)
-		if strings.HasPrefix(trimLine, "import ") || strings.HasPrefix(trimLine, "const {") && strings.Contains(trimLine, "require(") {
+		if inMulti {
 			removed = true
+			// The module-specifier line ("from '...'") or a statement terminator ends it.
+			if strings.Contains(trimLine, "from ") || strings.HasSuffix(trimLine, ";") {
+				inMulti = false
+			}
+			continue
+		}
+		isImport := strings.HasPrefix(trimLine, "import ") || strings.HasPrefix(trimLine, "import{")
+		isRequire := strings.HasPrefix(trimLine, "const {") && strings.Contains(trimLine, "require(")
+		if isImport || isRequire {
+			removed = true
+			if isImport && tsImportNeedsContinuation(trimLine) {
+				inMulti = true
+			}
 			continue
 		}
 		out = append(out, l)
