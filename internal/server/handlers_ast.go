@@ -224,16 +224,9 @@ func (s *Server) handleASTQuery(ctx context.Context, request mcp.CallToolRequest
 	allResults := s.runASTQueryWalk(ctx, p, exts)
 	cursorFooter := buildASTCursorFooter(len(allResults), p.offset, p.maxResults, p.queryHash)
 
-	output := query.FormatResultsWithOptions(allResults, p.maxResults, p.format, p.offset, p.verbose)
-	if cursorFooter != "" {
-		// Replace the [remaining: N] placeholder emitted by FormatResultsWithOptions
-		// with the full [cursor: ..., remaining: N] line.
-		output = strings.ReplaceAll(output, fmt.Sprintf("[remaining: %d]\n", len(allResults)-p.offset-p.maxResults), cursorFooter+"\n")
-		// Fallback: if placeholder wasn't present (e.g. format=location), append footer.
-		if !strings.Contains(output, cursorFooter) {
-			output = strings.TrimRight(output, "\n") + "\n" + cursorFooter + "\n"
-		}
-	}
+	// The formatter emits cursorFooter in place of its "[remaining: N]" hint when
+	// results are truncated; no fragile placeholder string-replacement needed.
+	output := query.FormatResultsWithCursor(allResults, p.maxResults, p.format, p.offset, p.verbose, cursorFooter)
 	return mcp.NewToolResultText(output), nil
 }
 

@@ -128,6 +128,33 @@ func TestFormatResultsPaginationCursor(t *testing.T) {
 	}
 }
 
+// FormatResultsWithCursor must emit the supplied cursor footer verbatim in place
+// of the bare "[remaining: N]" hint when results are truncated.
+func TestFormatResultsWithCursor(t *testing.T) {
+	results := makeResults(5)
+	cursor := "[cursor: abc123, remaining: 3]"
+
+	out := FormatResultsWithCursor(results, 2, "compact", 0, false, cursor)
+	if !strings.Contains(out, cursor) {
+		t.Errorf("expected cursor footer %q, got:\n%s", cursor, out)
+	}
+	if strings.Contains(out, "[remaining: 3]\n") {
+		t.Errorf("bare remaining hint should be replaced by cursor footer, got:\n%s", out)
+	}
+
+	// Empty cursorLine falls back to the bare hint (parity with FormatResultsWithOptions).
+	fallback := FormatResultsWithCursor(results, 2, "compact", 0, false, "")
+	if !strings.Contains(fallback, "[remaining: 3]") {
+		t.Errorf("empty cursorLine should fall back to [remaining: 3], got:\n%s", fallback)
+	}
+
+	// No truncation → no footer at all.
+	none := FormatResultsWithCursor(makeResults(2), 0, "compact", 0, false, cursor)
+	if strings.Contains(none, cursor) || strings.Contains(none, "[remaining:") {
+		t.Errorf("no truncation should emit no footer, got:\n%s", none)
+	}
+}
+
 func TestFormatResultsEmpty(t *testing.T) {
 	out := FormatResultsWithOptions(nil, 0, "verbose", 0)
 	if out != "No matches found." {

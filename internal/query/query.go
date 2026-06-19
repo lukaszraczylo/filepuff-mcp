@@ -460,7 +460,24 @@ func FormatResults(results []MatchResult, maxResults int) string {
 // format: "verbose" (default) | "compact" | "location"
 // offset: skip this many results before rendering (used for cursor pagination).
 // verbose: opt-in variadic — pass true to restore "Found N match(es):" preamble (v1 behaviour).
+// When results are truncated it emits a bare "[remaining: N]" hint; callers that
+// have a pagination cursor should use FormatResultsWithCursor to emit the full line.
 func FormatResultsWithOptions(results []MatchResult, maxResults int, format string, offset int, verbose ...bool) string {
+	return formatResults(results, maxResults, format, offset, len(verbose) > 0 && verbose[0], "")
+}
+
+// FormatResultsWithCursor is like FormatResultsWithOptions but, when results are
+// truncated, appends cursorLine verbatim instead of the bare "[remaining: N]"
+// hint. This lets the caller pass a fully-formed "[cursor: ..., remaining: N]"
+// footer without string-replacing a placeholder. If cursorLine is empty it
+// behaves like FormatResultsWithOptions.
+func FormatResultsWithCursor(results []MatchResult, maxResults int, format string, offset int, verbose bool, cursorLine string) string {
+	return formatResults(results, maxResults, format, offset, verbose, cursorLine)
+}
+
+// formatResults is the shared implementation. cursorLine, when non-empty, is
+// emitted in place of the "[remaining: N]" hint on truncation.
+func formatResults(results []MatchResult, maxResults int, format string, offset int, verbose bool, cursorLine string) string {
 	if len(results) == 0 {
 		return "No matches found."
 	}
@@ -484,8 +501,7 @@ func FormatResultsWithOptions(results []MatchResult, maxResults int, format stri
 	var sb strings.Builder
 
 	// Emit preamble only when verbose=true is explicitly passed (opt-in, default off).
-	wantVerbose := len(verbose) > 0 && verbose[0]
-	if wantVerbose {
+	if verbose {
 		fmt.Fprintf(&sb, "Found %d match(es):\n", renderCount)
 	}
 
@@ -547,9 +563,13 @@ func FormatResultsWithOptions(results []MatchResult, maxResults int, format stri
 	}
 
 	if remaining > 0 {
-		// Caller must embed the cursor token; we just append the remaining count hint.
-		// The actual [cursor: ...] line is written by the handler after calling MakeCursor.
-		fmt.Fprintf(&sb, "[remaining: %d]\n", remaining)
+		if cursorLine != "" {
+			// Caller supplied a fully-formed "[cursor: ..., remaining: N]" footer.
+			sb.WriteString(strings.TrimRight(cursorLine, "\n"))
+			sb.WriteByte('\n')
+		} else {
+			fmt.Fprintf(&sb, "[remaining: %d]\n", remaining)
+		}
 	}
 
 	return sb.String()
