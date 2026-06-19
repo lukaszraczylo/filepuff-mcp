@@ -212,10 +212,16 @@ func (m *Manager) GetServer(ctx context.Context, lang protocol.Language) (*Manag
 	// Initialize server
 	if err := m.initializeServer(ctx, newSrv); err != nil {
 		newSrv.initErr = err
-		return nil, errors.Wrap(errors.ErrLSPInitFailed, "LSP server initialization failed", err).
+		wrapped := errors.Wrap(errors.ErrLSPInitFailed, "LSP server initialization failed", err).
 			WithContext("language", string(lang)).
 			WithContext("command", config.Command[0]).
 			WithRemediation("Check LSP server logs for initialization errors")
+		// Surface the server's own stderr (e.g. "command not found", missing
+		// module) so the failure is diagnosable instead of opaque.
+		if stderr := client.RecentStderr(); stderr != "" {
+			wrapped = wrapped.WithContext("stderr", stderr)
+		}
+		return nil, wrapped
 	}
 
 	// Mark as successfully initialized to prevent cleanup

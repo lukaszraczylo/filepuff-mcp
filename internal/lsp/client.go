@@ -22,6 +22,10 @@ const ProcessKillTimeout = 5 * time.Second
 // StderrBufferSize is the buffer size for draining stderr.
 const StderrBufferSize = 1024
 
+// StderrCaptureMax is the maximum number of recent stderr bytes retained for
+// diagnostics (e.g. to explain an init failure). Older bytes are dropped.
+const StderrCaptureMax = 4096
+
 // Client represents an LSP client connection.
 type Client struct {
 	stdin         io.WriteCloser
@@ -35,6 +39,8 @@ type Client struct {
 	runningMu     sync.RWMutex
 	stopOnce      sync.Once
 	mu            sync.Mutex
+	stderrMu      sync.Mutex
+	stderrTail    []byte // most recent stderr, capped at StderrCaptureMax (diagnostics)
 	running       bool
 }
 
@@ -135,12 +141,33 @@ func (c *Client) drainStderr() {
 			return
 		default:
 		}
-		// Read and discard stderr output
-		_, err := c.stderr.Read(buf)
+		n, err := c.stderr.Read(buf)
+		if n > 0 {
+			c.captureStderr(buf[:n])
+		}
 		if err != nil {
 			return
 		}
 	}
+}
+
+// captureStderr appends p to the retained stderr tail, keeping at most
+// StderrCaptureMax bytes (dropping the oldest).
+func (c *Client) captureStderr(p []byte) {
+	c.stderrMu.Lock()
+	defer c.stderrMu.Unlock()
+	c.stderrTail = append(c.stderrTail, p...)
+	if len(c.stderrTail) > StderrCaptureMax {
+		c.stderrTail = c.stderrTail[len(c.stderrTail)-StderrCaptureMax:]
+	}
+}
+
+// RecentStderr returns the retained tail of the server's stderr, trimmed. Useful
+// for surfacing why an LSP server failed to start.
+func (c *Client) RecentStderr() string {
+	c.stderrMu.Lock()
+	defer c.stderrMu.Unlock()
+	return strings.TrimSpace(string(c.stderrTail))
 }
 
 // Call sends a request and waits for a response.
