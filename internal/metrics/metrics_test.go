@@ -71,6 +71,16 @@ func TestCounter(t *testing.T) {
 	}
 }
 
+// Counters are monotonic: a negative Add must be ignored, not applied.
+func TestCounterRejectsNegativeAdd(t *testing.T) {
+	c := NewCounter("mono_counter", "test", nil)
+	c.Add(5)
+	c.Add(-3)
+	if got := c.Value(); got != 5 {
+		t.Errorf("negative Add should be ignored: Value() = %d, want 5", got)
+	}
+}
+
 func TestCounterConcurrency(t *testing.T) {
 	c := NewCounter("concurrent_counter", "test", nil)
 	var wg sync.WaitGroup

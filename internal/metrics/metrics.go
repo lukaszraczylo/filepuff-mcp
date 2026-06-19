@@ -33,8 +33,13 @@ func (c *Counter) Inc() {
 	c.value.Add(1)
 }
 
-// Add adds the given value to the counter.
+// Add adds the given value to the counter. Counters are monotonic, so a
+// negative delta (which would corrupt rate()-style calculations downstream) is
+// ignored rather than applied.
 func (c *Counter) Add(delta int64) {
+	if delta < 0 {
+		return
+	}
 	c.value.Add(delta)
 }
 
