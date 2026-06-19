@@ -642,16 +642,19 @@ func flattenDiffLines(diffs []diffmatchpatch.Diff) (lines []diffLine, maxOldN, m
 			// Strip the terminator for display; also drop a trailing CR so CRLF files
 			// do not leak raw carriage returns into the rendered diff.
 			text := strings.TrimSuffix(strings.TrimSuffix(raw, "\n"), "\r")
+			// Record both running line numbers on every line (not just the active
+			// side): the opposite-side counter is the position the change sits at,
+			// which hunkBounds needs to compute correct @@ header start lines.
 			switch d.Type {
 			case diffmatchpatch.DiffEqual:
 				lines = append(lines, diffLine{op: d.Type, text: text, oldN: oldLine, newN: newLine})
 				oldLine++
 				newLine++
 			case diffmatchpatch.DiffDelete:
-				lines = append(lines, diffLine{op: d.Type, text: text, oldN: oldLine})
+				lines = append(lines, diffLine{op: d.Type, text: text, oldN: oldLine, newN: newLine})
 				oldLine++
 			case diffmatchpatch.DiffInsert:
-				lines = append(lines, diffLine{op: d.Type, text: text, newN: newLine})
+				lines = append(lines, diffLine{op: d.Type, text: text, oldN: oldLine, newN: newLine})
 				newLine++
 			}
 		}
@@ -680,37 +683,30 @@ func diffHunkRanges(lines []diffLine) []indexRange {
 }
 
 // hunkBounds computes the unified-diff hunk header line numbers and counts for
-// lines[start:end+1]. newStart/oldStart for one-sided lines are approximate.
+// lines[start:end+1]. Each line carries both running line numbers (see
+// flattenDiffLines), so the hunk start is simply the first line's numbers. When a
+// side has zero lines in the hunk (pure insertion or deletion), the header start
+// for that side follows GNU's convention: the line number *before* the change,
+// clamped to 0 at the start of the file (e.g. "@@ -0,0 +1,N @@").
 func hunkBounds(lines []diffLine, start, end int) (oldStart, oldCount, newStart, newCount int) {
+	oldStart = lines[start].oldN
+	newStart = lines[start].newN
 	for i := start; i <= end; i++ {
-		l := lines[i]
-		switch l.op {
+		switch lines[i].op {
 		case diffmatchpatch.DiffEqual:
-			if oldCount == 0 {
-				oldStart = l.oldN
-			}
-			if newCount == 0 {
-				newStart = l.newN
-			}
 			oldCount++
 			newCount++
 		case diffmatchpatch.DiffDelete:
-			if oldCount == 0 {
-				oldStart = l.oldN
-			}
-			if newCount == 0 {
-				newStart = l.oldN // approximate
-			}
 			oldCount++
 		case diffmatchpatch.DiffInsert:
-			if newCount == 0 {
-				newStart = l.newN
-			}
-			if oldCount == 0 {
-				oldStart = l.newN // approximate
-			}
 			newCount++
 		}
+	}
+	if oldCount == 0 {
+		oldStart = max(0, oldStart-1)
+	}
+	if newCount == 0 {
+		newStart = max(0, newStart-1)
 	}
 	return
 }

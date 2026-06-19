@@ -427,6 +427,29 @@ func TestGenerateDiffLineLevelAccuracy(t *testing.T) {
 	}
 }
 
+// Hunk @@ headers must be correct at file boundaries (previously approximate).
+func TestGenerateDiffHunkHeaderBounds(t *testing.T) {
+	e := &Engine{dmp: diffmatchpatch.New()}
+	tests := []struct {
+		name     string
+		original string
+		modified string
+		wantHdr  string
+	}{
+		{name: "insert into empty file", original: "", modified: "X\nY\n", wantHdr: "@@ -0,0 +1,2 @@"},
+		{name: "delete entire file", original: "a\nb\n", modified: "", wantHdr: "@@ -1,2 +0,0 @@"},
+		{name: "mid-file change keeps 1-based start", original: "l1\nl2\nl3\nl4\nl5\n", modified: "l1\nl2\nCHANGED\nl4\nl5\n", wantHdr: "@@ -1,5 +1,5 @@"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			diff := e.generateDiff(tt.original, tt.modified, "f.txt")
+			if !strings.Contains(diff, tt.wantHdr) {
+				t.Errorf("expected hunk header %q, got:\n%s", tt.wantHdr, diff)
+			}
+		})
+	}
+}
+
 func TestGenerateDiffNoPhantomChanges(t *testing.T) {
 	// Regression test: replacing a line range should not produce phantom
 	// +/- lines for unchanged code after the edit region.
