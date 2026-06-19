@@ -40,17 +40,19 @@ func SkeletonFile(ctx context.Context, reg *Registry, filename string, content [
 	}
 }
 
-// renderSymbolsOnly renders a simple symbol list (fallback for unsupported languages).
-// It deliberately does not fabricate "<source line> { ... }" output: the raw start
-// line plus a guessed brace is wrong for brace-less languages (e.g. Elixir's "def f do",
-// HTML) and only wastes tokens. The symbol list (kind, name, line, doc) is accurate.
+// renderSymbolsOnly renders a compact symbol list (fallback for unsupported
+// languages). It deliberately does not fabricate "<source line> { ... }" output:
+// the raw start line plus a guessed brace is wrong for brace-less languages (e.g.
+// Elixir's "def f do", HTML) and only wastes tokens. The output is not valid
+// source, so it drops "// " comment framing and uses a dense "kind name :line"
+// form to minimise tokens. The symbol list (kind, name, line, doc) is accurate.
 func renderSymbolsOnly(syms []protocol.Symbol, lang protocol.Language) string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "// skeleton unavailable for %s — symbol list only\n", lang)
+	fmt.Fprintf(&sb, "symbols only (no skeleton for %s):\n", lang)
 	for _, s := range syms {
-		fmt.Fprintf(&sb, "// %s %s  (line %d)\n", s.Kind, s.Name, s.Location.Line)
+		fmt.Fprintf(&sb, "%s %s :%d\n", s.Kind, s.Name, s.Location.Line)
 		if s.Doc != "" {
-			fmt.Fprintf(&sb, "// doc: %s\n", s.Doc)
+			fmt.Fprintf(&sb, "  doc: %s\n", s.Doc)
 		}
 	}
 	return sb.String()
