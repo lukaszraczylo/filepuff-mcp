@@ -864,7 +864,7 @@ func truncateString(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
 	}
-	return s[:maxLen-3] + "..."
+	return s[:util.RuneBoundary(s, maxLen-3)] + "..."
 }
 
 // ValidateLanguage checks if AST editing is supported for a file.

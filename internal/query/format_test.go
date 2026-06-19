@@ -186,6 +186,9 @@ func TestFirstLineOf(t *testing.T) {
 		{"line1\nline2", 20, "line1"},
 		{"\n\nfoo", 20, "foo"},
 		{"abcdefghij", 5, "abcd…"},
+		// Multibyte: "ααα" is 6 bytes (each α = 2). maxLen-1 = 3 lands inside the
+		// 2nd α; must back off to a rune boundary, never split into invalid UTF-8.
+		{"ααα", 4, "α…"},
 	}
 	for _, c := range cases {
 		got := firstLineOf(c.input, c.maxLen)

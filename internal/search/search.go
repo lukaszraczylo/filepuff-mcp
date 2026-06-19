@@ -10,10 +10,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"unicode/utf8"
 
 	json "github.com/goccy/go-json"
 	"github.com/lukaszraczylo/mcp-filepuff/internal/config"
+	"github.com/lukaszraczylo/mcp-filepuff/internal/util"
 	"github.com/lukaszraczylo/mcp-filepuff/pkg/errors"
 	"github.com/lukaszraczylo/mcp-filepuff/pkg/protocol"
 )
@@ -495,9 +495,5 @@ func truncateLine(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
 	}
-	end := max(maxLen-3, 0)
-	for end > 0 && !utf8.RuneStart(s[end]) {
-		end--
-	}
-	return s[:end] + "..."
+	return s[:util.RuneBoundary(s, maxLen-3)] + "..."
 }

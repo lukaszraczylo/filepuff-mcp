@@ -583,7 +583,7 @@ func firstLineOf(s string, maxLen int) string {
 			continue
 		}
 		if len(line) > maxLen {
-			return line[:maxLen-1] + "…"
+			return line[:util.RuneBoundary(line, maxLen-1)] + "…"
 		}
 		return line
 	}
