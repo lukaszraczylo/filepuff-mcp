@@ -13,6 +13,51 @@ import (
 	"github.com/lukaszraczylo/mcp-filepuff/internal/config"
 )
 
+// parseOutput must not attach one file's pending before-context to a match in a
+// different file (cross-file leak guard in the JSON stream parser).
+func TestParseOutputCrossFileContextNotLeaked(t *testing.T) {
+	s := newTestSearcher(t)
+	var buf bytes.Buffer
+	// fileA emits a before-context with no following match in fileA; then fileB
+	// has a match. fileA's pending context must NOT attach to fileB's match.
+	buf.WriteString(`{"type":"context","data":{"path":{"text":"fileA.go"},"lines":{"text":"orphan a ctx\n"},"line_number":1}}` + "\n")
+	buf.WriteString(`{"type":"match","data":{"path":{"text":"fileB.go"},"lines":{"text":"hit B\n"},"line_number":5,"submatches":[{"match":{"text":"hit"},"start":0,"end":3}]}}` + "\n")
+
+	res, err := s.parseOutput(&buf, 0)
+	if err != nil {
+		t.Fatalf("parseOutput: %v", err)
+	}
+	if len(res.Results) != 1 {
+		t.Fatalf("want 1 result, got %d", len(res.Results))
+	}
+	if res.Results[0].File != "fileB.go" {
+		t.Errorf("result file = %q, want fileB.go", res.Results[0].File)
+	}
+	if len(res.Results[0].Context.Before) != 0 {
+		t.Errorf("fileA context leaked into fileB match: %v", res.Results[0].Context.Before)
+	}
+}
+
+// parseOutput must attach a same-file before-context to the following match.
+func TestParseOutputSameFileBeforeContext(t *testing.T) {
+	s := newTestSearcher(t)
+	var buf bytes.Buffer
+	buf.WriteString(`{"type":"context","data":{"path":{"text":"f.go"},"lines":{"text":"before line\n"},"line_number":4}}` + "\n")
+	buf.WriteString(`{"type":"match","data":{"path":{"text":"f.go"},"lines":{"text":"the match\n"},"line_number":5,"submatches":[{"match":{"text":"match"},"start":4,"end":9}]}}` + "\n")
+
+	res, err := s.parseOutput(&buf, 0)
+	if err != nil {
+		t.Fatalf("parseOutput: %v", err)
+	}
+	if len(res.Results) != 1 {
+		t.Fatalf("want 1 result, got %d", len(res.Results))
+	}
+	got := res.Results[0].Context.Before
+	if len(got) != 1 || got[0] != "before line" {
+		t.Errorf("same-file before-context not attached: %v", got)
+	}
+}
+
 // truncateLine must back off to a rune boundary so multibyte characters are
 // never split into invalid UTF-8.
 func TestTruncateLineRuneSafe(t *testing.T) {
