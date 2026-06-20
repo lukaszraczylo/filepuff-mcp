@@ -131,7 +131,10 @@ func (s *Server) runASTQueryWalk(ctx context.Context, p *astQueryParams, exts []
 				return nil
 			}
 			if info.IsDir() {
-				if strings.HasPrefix(info.Name(), ".") {
+				// Skip hidden and dependency dirs (third-party code that would
+				// flood results), but never the walk root itself — the caller
+				// explicitly targeted it, e.g. paths:["vendor/foo"].
+				if path != searchPath && (strings.HasPrefix(info.Name(), ".") || isDependencyDir(info.Name())) {
 					return filepath.SkipDir
 				}
 				return nil
@@ -170,6 +173,19 @@ func (s *Server) runASTQueryWalk(ctx context.Context, p *astQueryParams, exts []
 		}
 	}
 	return allResults
+}
+
+// isDependencyDir reports whether name is a well-known third-party dependency
+// directory that ast_query skips by default. These hold vendored/installed code,
+// not the caller's source, and parsing them wastes time and floods results with
+// irrelevant matches. Target one explicitly via paths to query inside it.
+func isDependencyDir(name string) bool {
+	switch name {
+	case "node_modules", "vendor", "bower_components":
+		return true
+	default:
+		return false
+	}
 }
 
 // hasAnySuffix reports whether path ends with any of the given suffixes.

@@ -96,6 +96,11 @@ const helpASTQuery = "# ast_query — flags and examples\n\n" +
 	"Captured `$VAR` values appear in output but do not constrain which nodes match.\n\n" +
 	"For precise selection, combine the pattern with `name_exact`, `name_matches`, and/or `kind_in` — " +
 	"these ARE applied as filters.\n\n" +
+	"## Scope\n\n" +
+	"The walk skips hidden directories (dot-prefixed) and dependency directories " +
+	"(`node_modules`, `vendor`, `bower_components`) — these hold third-party code that would " +
+	"flood results. To query inside one, name it explicitly in `paths` (e.g. `\"paths\": [\"vendor/foo\"]`); " +
+	"the targeted root is never skipped. Note: unlike file_search, ast_query does not consult .gitignore.\n\n" +
 	"## Examples\n\n" +
 	"```json\n" +
 	"// All Go functions/methods (the 'error' return is NOT enforced — add name_/kind_in to narrow)\n" +

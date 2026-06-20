@@ -150,6 +150,69 @@ func TestASTQueryFormatLocation(t *testing.T) {
 	}
 }
 
+// TestASTQuerySkipsDependencyDirs verifies ast_query excludes node_modules/vendor
+// by default (they flood results with third-party code) but still searches them
+// when the caller targets one explicitly via paths (the walk root is never skipped).
+func TestASTQuerySkipsDependencyDirs(t *testing.T) {
+	srv, tmpDir := newFeaturesServer(t)
+	ctx := context.Background()
+
+	deps := map[string]string{
+		"node_modules": "NodeModulesDep",
+		"vendor":       "VendorDep",
+	}
+	for dir, fn := range deps {
+		full := filepath.Join(tmpDir, dir)
+		if err := os.MkdirAll(full, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		src := "package dep\n\nfunc " + fn + "() string { return \"\" }\n"
+		if err := os.WriteFile(filepath.Join(full, "dep.go"), []byte(src), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Default: workspace-root query must skip the dependency dirs.
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]interface{}{
+		"pattern":  "func $NAME() string",
+		"language": "go",
+		"paths":    []interface{}{tmpDir},
+		"format":   "location",
+	}
+	res, err := srv.handleASTQuery(ctx, req)
+	if err != nil {
+		t.Fatalf("default query error: %v", err)
+	}
+	// location format prints file:line, so assert on paths.
+	text := res.Content[0].(mcp.TextContent).Text
+	if !strings.Contains(text, "a.go") {
+		t.Errorf("default query should find top-level a.go, got:\n%s", text)
+	}
+	for dir := range deps {
+		if strings.Contains(text, dir+string(filepath.Separator)) {
+			t.Errorf("default query must skip %s, got:\n%s", dir, text)
+		}
+	}
+
+	// Explicit target: querying inside node_modules must still find its code.
+	req2 := mcp.CallToolRequest{}
+	req2.Params.Arguments = map[string]interface{}{
+		"pattern":  "func $NAME() string",
+		"language": "go",
+		"paths":    []interface{}{filepath.Join(tmpDir, "node_modules")},
+		"format":   "location",
+	}
+	res2, err := srv.handleASTQuery(ctx, req2)
+	if err != nil {
+		t.Fatalf("explicit-target query error: %v", err)
+	}
+	text2 := res2.Content[0].(mcp.TextContent).Text
+	if !strings.Contains(text2, "node_modules"+string(filepath.Separator)+"dep.go") {
+		t.Errorf("explicit node_modules target must find node_modules/dep.go, got:\n%s", text2)
+	}
+}
+
 // ---- Feature 3 (ast_query): pagination cursor ----
 
 func TestASTQueryPaginationCursor(t *testing.T) {

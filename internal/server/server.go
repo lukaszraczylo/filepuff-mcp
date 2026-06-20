@@ -226,6 +226,7 @@ func (s *Server) registerTools() {
 		mcp.NewTool("ast_query",
 			mcp.WithDescription("Search for AST patterns in code files. Use code patterns with $VAR placeholders to match and capture code structures like functions, classes, and types. "+
 				"Matching is keyword/kind-based, not fully structural: argument and return-type constraints in the pattern are not enforced — use name_exact/name_matches/kind_in to filter precisely. "+
+				"Hidden dirs and dependency dirs (node_modules, vendor, bower_components) are skipped unless targeted explicitly via paths. "+
 				"See resource filepuff://help/ast_query for flags and examples."),
 			mcp.WithReadOnlyHintAnnotation(true),
 			mcp.WithString("pattern",
