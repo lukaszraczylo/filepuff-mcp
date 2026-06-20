@@ -59,6 +59,33 @@ func TestEditApplyPreservesBackslashSequencesText(t *testing.T) {
 	}
 }
 
+// TestEditApplyDiffResponseFencedNoLabel verifies response=diff emits the unified
+// diff in a ```diff fence with no redundant "Diff:" label (the fence and the diff's
+// own headers already identify it; the label would only cost tokens).
+func TestEditApplyDiffResponseFencedNoLabel(t *testing.T) {
+	tmpDir := t.TempDir()
+	srv := newTestServer(t, tmpDir)
+	f := writeFile(t, tmpDir, "note.txt", "before\n")
+
+	res := callEdit(t, srv, map[string]any{
+		"file":          f,
+		"operation":     "replace",
+		"selector_text": "before",
+		"new_content":   "after",
+		"response":      "diff",
+	})
+	if res.IsError {
+		t.Fatalf("edit returned error: %+v", res.Content)
+	}
+	out := res.Content[0].(mcp.TextContent).Text
+	if !strings.HasPrefix(out, "```diff\n") {
+		t.Errorf("diff response should start with the ```diff fence, got:\n%s", out)
+	}
+	if strings.Contains(out, "Diff:") {
+		t.Errorf("diff response should not carry a redundant 'Diff:' label, got:\n%s", out)
+	}
+}
+
 // TestCountDiffLinesHunkAware verifies the line counter skips file headers structurally and
 // counts content lines whose own text begins with + or - (previously dropped as "+++"/"---").
 func TestCountDiffLinesHunkAware(t *testing.T) {

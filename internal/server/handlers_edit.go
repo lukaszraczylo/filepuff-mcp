@@ -92,20 +92,19 @@ func (s *Server) handleEdit(ctx context.Context, request mcp.CallToolRequest) (*
 		return mcp.NewToolResultText(fmt.Sprintf("+%d -%d", added, removed)), nil
 
 	case "diff":
-		var output strings.Builder
-		output.WriteString("Diff:\n```diff\n")
-		output.WriteString(result.Diff)
-		output.WriteString("```\n")
-		return mcp.NewToolResultText(output.String()), nil
+		return mcp.NewToolResultText(fencedDiff(result.Diff)), nil
 
 	default:
 		// Fallback: treat unknown values as "diff" for safety.
-		var output strings.Builder
-		output.WriteString("Diff:\n```diff\n")
-		output.WriteString(result.Diff)
-		output.WriteString("```\n")
-		return mcp.NewToolResultText(output.String()), nil
+		return mcp.NewToolResultText(fencedDiff(result.Diff)), nil
 	}
+}
+
+// fencedDiff wraps a unified diff in a ```diff code fence. No "Diff:" label is
+// added — the fence and the diff's own ---/+++ headers already identify it, so
+// the label would only cost tokens.
+func fencedDiff(diff string) string {
+	return "```diff\n" + diff + "```\n"
 }
 
 // countDiffLines counts added (+) and removed (-) content lines in a unified diff.

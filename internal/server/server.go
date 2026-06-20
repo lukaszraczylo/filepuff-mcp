@@ -193,7 +193,7 @@ func (s *Server) registerTools() {
 				mcp.Description("Output mode: 'full' (default, full file), 'skeleton' (signatures + { ... } stubs, bodies elided), 'symbols_only' (symbol list only, alias for symbols_only=true)."),
 			),
 			mcp.WithArray("strip",
-				mcp.Description("Strip content classes before line-numbering. Values: 'imports' (remove import blocks), 'license' (remove leading license comment), 'block_comments' (remove /* */ and Python triple-quoted strings). Emits [stripped: ...] footer."),
+				mcp.Description("Strip content classes before line-numbering. Values: 'imports' (remove import blocks), 'license' (remove leading license comment), 'block_comments' (remove /* */ and Python triple-quoted strings). Emits [stripped: ...] footer. Note: line numbers are renumbered from 1 over the stripped content, so they no longer match the file's original line numbers."),
 				mcp.WithStringItems(),
 			),
 			mcp.WithNumber("max_lines",
