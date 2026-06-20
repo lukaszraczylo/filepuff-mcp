@@ -215,6 +215,36 @@ func TestASTQuerySkipsDependencyDirs(t *testing.T) {
 
 // ---- Feature 3 (ast_query): pagination cursor ----
 
+// TestASTQueryFirstPageCursor is a strict regression guard: page 1 must emit a
+// cursor with an accurate remaining count when more matches exist. Previously
+// the page-1 walk was capped at max_results, so the total was truncated and the
+// cursor fired nondeterministically (and with a wrong remaining count).
+func TestASTQueryFirstPageCursor(t *testing.T) {
+	srv, tmpDir := newFeaturesServer(t)
+	ctx := context.Background()
+
+	// Fixture has 5 functions (Alpha/Beta/Gamma/Delta/Epsilon); cap at 2.
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]interface{}{
+		"pattern":     "func $NAME() $RET",
+		"language":    "go",
+		"paths":       []interface{}{tmpDir},
+		"max_results": float64(2),
+	}
+	res, err := srv.handleASTQuery(ctx, req)
+	if err != nil {
+		t.Fatalf("page1 error: %v", err)
+	}
+	text := res.Content[0].(mcp.TextContent).Text
+	if !strings.Contains(text, "[cursor:") {
+		t.Fatalf("page1 with 5 matches capped at 2 must emit a cursor, got:\n%s", text)
+	}
+	// 5 total - 2 shown = 3 remaining.
+	if !strings.Contains(text, "remaining: 3") {
+		t.Errorf("expected accurate 'remaining: 3', got:\n%s", text)
+	}
+}
+
 func TestASTQueryPaginationCursor(t *testing.T) {
 	srv, tmpDir := newFeaturesServer(t)
 	ctx := context.Background()

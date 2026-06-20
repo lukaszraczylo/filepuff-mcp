@@ -109,12 +109,13 @@ func (s *Server) runASTQueryWalk(ctx context.Context, p *astQueryParams, exts []
 		},
 	}
 
-	// Collect limit for early-exit: when paginating we need all results first.
-	collectLimit := p.maxResults
-	if p.offset > 0 {
-		collectLimit = 0
-	}
-
+	// A full walk is required on every page: the cursor's "remaining" count is
+	// derived from the total match count (see buildASTCursorFooter), so the page-1
+	// response can only emit a correct cursor if it has seen every match. Capping
+	// page 1 at max_results made the cursor fire nondeterministically (only when
+	// the last parsed file overshot the cap) with a wrong remaining count. Parse
+	// results are LRU-cached, so re-walking on later pages is mostly file I/O, and
+	// matches below max_results already visit the whole tree regardless.
 	var allResults []query.MatchResult
 	for _, searchPath := range p.paths {
 		if !s.cfg.IsPathAllowed(searchPath) {
@@ -162,10 +163,6 @@ func (s *Server) runASTQueryWalk(ctx context.Context, p *astQueryParams, exts []
 				return nil
 			}
 			allResults = append(allResults, matches...)
-
-			if collectLimit > 0 && len(allResults) >= collectLimit {
-				return filepath.SkipAll
-			}
 			return nil
 		})
 		if walkErr != nil {
