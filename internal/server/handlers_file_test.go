@@ -589,19 +589,23 @@ func TestCompactLineNumbers(t *testing.T) {
 	}
 }
 
-func TestCompactLineNumbersOffByDefault(t *testing.T) {
+func TestCompactLineNumbersDefaultAndOptOut(t *testing.T) {
 	tmpDir := t.TempDir()
 	srv := newTestServer(t, tmpDir)
 
 	content := "line one\nline two\n"
 	f := writeFile(t, tmpDir, "test.txt", content)
 
-	// Default: no compact_line_numbers
-	out := callRead(t, srv, map[string]interface{}{"path": f})
+	// Default is now the compact prefix (token-saving): "1│line one".
+	def := callRead(t, srv, map[string]interface{}{"path": f})
+	if !strings.Contains(def, "1│line one") || strings.Contains(def, "   1│ line one") {
+		t.Errorf("default should use compact prefix, got:\n%s", def)
+	}
 
-	// Should have padded format
-	if !strings.Contains(out, "   1│ line one") {
-		t.Errorf("default should have padded format, got:\n%s", out)
+	// Explicit opt-out restores the padded alignment.
+	padded := callRead(t, srv, map[string]interface{}{"path": f, "compact_line_numbers": false})
+	if !strings.Contains(padded, "   1│ line one") {
+		t.Errorf("compact_line_numbers=false should restore padded format, got:\n%s", padded)
 	}
 }
 
@@ -679,9 +683,9 @@ func Hello() {
 	if !strings.Contains(out, `println("hello")`) {
 		t.Errorf("full mode missing body, got:\n%s", out)
 	}
-	// Padded line numbers
-	if !strings.Contains(out, "   1│ package main") {
-		t.Errorf("default should have padded line numbers, got:\n%s", out)
+	// Default line numbers use the compact prefix.
+	if !strings.Contains(out, "1│package main") {
+		t.Errorf("default should have compact line numbers, got:\n%s", out)
 	}
 	// etag present
 	if !strings.Contains(out, "[etag:") {

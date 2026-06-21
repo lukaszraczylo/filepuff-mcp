@@ -326,9 +326,13 @@ type lineNumberOpts struct {
 // resolveLineNumberOpts resolves per-call vs session-pref line-number options.
 func (s *Server) resolveLineNumberOpts(request mcp.CallToolRequest) lineNumberOpts {
 	opts := lineNumberOpts{
-		noLineNumbers:   request.GetBool("no_line_numbers", false),
-		lineInterval:    request.GetInt("line_number_interval", 1),
-		compactLineNums: request.GetBool("compact_line_numbers", false),
+		noLineNumbers: request.GetBool("no_line_numbers", false),
+		lineInterval:  request.GetInt("line_number_interval", 1),
+		// Compact prefix ("12│content") is the default — it drops the 4-wide
+		// padding and trailing space of the legacy "  12│ " form, saving ~3
+		// chars/line with no information loss. Pass compact_line_numbers=false
+		// (or mode/line_numbers="full") to restore the padded alignment.
+		compactLineNums: request.GetBool("compact_line_numbers", true),
 	}
 
 	// Apply session line_numbers pref when no explicit per-call override was supplied.

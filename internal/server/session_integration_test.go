@@ -48,7 +48,7 @@ func TestSessionPrefsFileReadLineNumbersNone(t *testing.T) {
 		t.Fatalf("handleFileRead: %v", err)
 	}
 	text := result.Content[0].(mcp.TextContent).Text
-	// Standard line-number format is "   1│ "; with no_line_numbers it's absent.
+	// line_numbers=none suppresses the prefix entirely (no "│" gutter at all).
 	if strings.Contains(text, "   1│") {
 		t.Errorf("session line_numbers=none: expected no line-number prefix, got:\n%s", text)
 	}
@@ -87,7 +87,7 @@ func TestSessionPrefsFileReadLineNumbersCompact(t *testing.T) {
 	req.Params.Arguments = map[string]interface{}{"path": testFile}
 	result, _ := srv.handleFileRead(ctx, req)
 	text := result.Content[0].(mcp.TextContent).Text
-	// Standard padded prefix is "   1│ "; compact is "1│".
+	// Padded prefix is "   1│ "; compact is "1│".
 	if strings.Contains(text, "   1\u2502") {
 		t.Errorf("session line_numbers=compact should use compact prefix, got:\n%s", text)
 	}

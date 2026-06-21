@@ -206,7 +206,7 @@ func (s *Server) registerTools() {
 				mcp.Description("Print line numbers only every N lines (default: 1 = every line). E.g. 10 = anchor every 10th line plus first/last. 0 = no line numbers."),
 			),
 			mcp.WithBoolean("compact_line_numbers",
-				mcp.Description("Use compact line prefix '12\u2502' instead of '  12\u2502 ' (no padding, no trailing space). Works with line_number_interval. Default off."),
+				mcp.Description("Use compact line prefix '12\u2502' instead of padded '  12\u2502 ' (no padding, no trailing space). Works with line_number_interval. Default true; set false to restore padded alignment."),
 			),
 			mcp.WithBoolean("collapse_blank_lines",
 				mcp.Description("Collapse runs of consecutive blank lines to a single blank line. Useful for token savings on heavily-spaced code."),
