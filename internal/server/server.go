@@ -299,7 +299,7 @@ func (s *Server) registerTools() {
 					mcp.Description("Include the declaration in results. Only valid for action=references (default: true)."),
 				),
 				mcp.WithBoolean("compact",
-					mcp.Description("Compact output: one line per file with all refs in brackets. Only valid for action=references. Default: false."),
+					mcp.Description("Compact output: one line per file with all refs in brackets. Only valid for action=references. Default: true; set false for one line per reference."),
 				),
 				mcp.WithBoolean("verbose",
 					mcp.Description("Emit count/header preamble. Applies to all actions. Default: false."),

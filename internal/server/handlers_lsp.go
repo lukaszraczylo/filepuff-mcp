@@ -74,12 +74,14 @@ func (s *Server) handleLSPQuery(ctx context.Context, request mcp.CallToolRequest
 
 	case "references":
 		includeDecl := request.GetBool("include_declaration", true)
-		// compact: explicit call-time > session compact_refs pref > false
+		// compact: explicit call-time > session compact_refs pref > true.
+		// Compact (one line per file) is the default — it preserves every
+		// line:col pair while cutting ~one line per reference for the LLM consumer.
 		var prefsCompact *bool
 		if sp := s.sessionPrefs.Load(); sp != nil {
 			prefsCompact = sp.CompactRefs
 		}
-		compact := effectiveBool(request, "compact", prefsCompact, false)
+		compact := effectiveBool(request, "compact", prefsCompact, true)
 		return s.lspReferences(ctx, file, line, col, includeDecl, compact, verbose)
 
 	default:
