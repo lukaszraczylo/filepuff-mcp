@@ -369,6 +369,73 @@ func Hello() {
 	}
 }
 
+// TestApplyRevalidatesPathBeforeWrite verifies the write-time admission re-check:
+// an Engine whose validator rejects the target must refuse the write and leave
+// the file untouched (the TOCTOU guard against a symlink swapped in after the
+// handler's original IsPathAllowed check).
+func TestApplyRevalidatesPathBeforeWrite(t *testing.T) {
+	registry := parser.NewRegistry()
+	defer registry.Close()
+
+	tmpDir := t.TempDir()
+	tmpFile := filepath.Join(tmpDir, "test.go")
+	original := "package main\n\nfunc Hello() {}\n"
+	if err := os.WriteFile(tmpFile, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Validator denies the path (as IsPathAllowed would for a path that now
+	// resolves outside the workspace root).
+	e := NewEngineWithValidator(registry, func(string) bool { return false })
+
+	result, err := e.Apply(context.Background(), &ASTEdit{
+		File:       tmpFile,
+		Operation:  EditReplace,
+		Selector:   ASTSelector{Kind: "function_declaration"},
+		NewContent: "func Evil() {}",
+	})
+	if err != nil {
+		t.Fatalf("apply returned transport error: %v", err)
+	}
+	if result.Success || result.Applied {
+		t.Errorf("rejected-path edit must not apply (Success=%v Applied=%v)", result.Success, result.Applied)
+	}
+	if got, _ := os.ReadFile(tmpFile); string(got) != original {
+		t.Errorf("file must be unchanged when path validation fails; got:\n%s", got)
+	}
+}
+
+// TestApplyPreservesFileMode verifies an edit keeps the file's existing
+// permission bits rather than resetting them.
+func TestApplyPreservesFileMode(t *testing.T) {
+	registry := parser.NewRegistry()
+	defer registry.Close()
+	e := NewEngine(registry)
+
+	tmpDir := t.TempDir()
+	tmpFile := filepath.Join(tmpDir, "script.go")
+	if err := os.WriteFile(tmpFile, []byte("package main\n\nfunc Hello() {}\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := e.Apply(context.Background(), &ASTEdit{
+		File:       tmpFile,
+		Operation:  EditReplace,
+		Selector:   ASTSelector{Kind: "function_declaration"},
+		NewContent: "func Hi() {}",
+	})
+	if err != nil || !result.Success {
+		t.Fatalf("apply failed: err=%v result=%+v", err, result)
+	}
+	info, err := os.Stat(tmpFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o755 {
+		t.Errorf("file mode not preserved: got %o, want 0755", perm)
+	}
+}
+
 // An edit on a CRLF file must normalize inserted LF content to CRLF so the file
 // keeps a single, consistent line-ending convention (a documented guarantee).
 func TestApplyPreservesCRLF(t *testing.T) {

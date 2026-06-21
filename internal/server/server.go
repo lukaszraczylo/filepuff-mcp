@@ -54,7 +54,7 @@ func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
 		logger:   logger,
 		parser:   parserRegistry,
 		matcher:  query.NewMatcher(parserRegistry),
-		editor:   edit.NewEngine(parserRegistry),
+		editor:   edit.NewEngineWithValidator(parserRegistry, cfg.IsPathAllowed),
 		readSem:  make(chan struct{}, MaxConcurrentReads),
 		querySem: make(chan struct{}, MaxConcurrentQueries),
 	}

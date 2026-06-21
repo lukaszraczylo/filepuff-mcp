@@ -63,15 +63,44 @@ type Engine struct {
 	registry  *parser.Registry
 	dmp       *diffmatchpatch.DiffMatchPatch
 	fileLocks sync.Map // map[string]*sync.Mutex for per-file locking
+	// pathAllowed re-checks that a target path is admissible (within the
+	// workspace root) immediately before a write. Injected to avoid coupling
+	// edit to config; nil disables the check (used in unit tests).
+	pathAllowed func(string) bool
 }
 
-// NewEngine creates a new edit engine.
+// NewEngine creates a new edit engine with no write-time path validation.
 func NewEngine(registry *parser.Registry) *Engine {
+	return NewEngineWithValidator(registry, nil)
+}
+
+// NewEngineWithValidator creates an edit engine that re-validates each target
+// path with pathAllowed immediately before writing it, closing most of the
+// time-of-check/time-of-use window between the handler's admission check and the
+// actual write (a symlink swapped in afterward is rejected).
+func NewEngineWithValidator(registry *parser.Registry, pathAllowed func(string) bool) *Engine {
 	return &Engine{
-		registry:  registry,
-		dmp:       diffmatchpatch.New(),
-		fileLocks: sync.Map{},
+		registry:    registry,
+		dmp:         diffmatchpatch.New(),
+		fileLocks:   sync.Map{},
+		pathAllowed: pathAllowed,
 	}
+}
+
+// writeValidatedFile writes content to path, preserving the file's existing
+// permission bits, after re-checking that path is still admissible. The re-check
+// resolves symlinks at write time, so a symlink swapped in after the caller's
+// original validation cannot redirect the write outside the workspace root.
+func (e *Engine) writeValidatedFile(path string, content []byte) error {
+	if e.pathAllowed != nil && !e.pathAllowed(path) {
+		return errors.New(errors.ErrPathNotAllowed, "path is outside the workspace root").
+			WithContext("path", path)
+	}
+	perm := os.FileMode(0o600) // default fallback when the file can't be stat'd
+	if info, err := os.Stat(path); err == nil {
+		perm = info.Mode().Perm()
+	}
+	return os.WriteFile(path, content, perm)
 }
 
 // lockFile acquires a lock for the specified file and returns an unlock function.
@@ -179,14 +208,7 @@ func (e *Engine) performASTEdit(ctx context.Context, edit *ASTEdit, apply bool) 
 
 	// Apply changes if requested
 	if apply {
-		// Preserve original file permissions
-		fileInfo, err := os.Stat(edit.File)
-		perm := os.FileMode(0o600) // default fallback
-		if err == nil {
-			perm = fileInfo.Mode().Perm()
-		}
-
-		if err := os.WriteFile(edit.File, newContent, perm); err != nil {
+		if err := e.writeValidatedFile(edit.File, newContent); err != nil {
 			structuredErr := errors.NewFileNotWritableError(edit.File, err)
 			return &EditResult{
 				Success: false,
@@ -236,14 +258,7 @@ func (e *Engine) performTextEdit(_ context.Context, edit *ASTEdit, apply bool) (
 
 	// Apply changes if requested
 	if apply {
-		// Preserve original file permissions
-		fileInfo, err := os.Stat(edit.File)
-		perm := os.FileMode(0o600) // default fallback
-		if err == nil {
-			perm = fileInfo.Mode().Perm()
-		}
-
-		if err := os.WriteFile(edit.File, newContent, perm); err != nil {
+		if err := e.writeValidatedFile(edit.File, newContent); err != nil {
 			structuredErr := errors.NewFileNotWritableError(edit.File, err)
 			return &EditResult{
 				Success: false,
