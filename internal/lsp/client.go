@@ -304,7 +304,12 @@ func (c *Client) send(msg interface{}) error {
 // On exit (for any reason), it drains all pending Call waiters with a
 // synthetic error so that goroutines blocked in Call are unblocked.
 func (c *Client) readLoop() {
+	// On exit (EOF/error from a crashed or closed server) mark the client not
+	// running so subsequent Calls fail fast — otherwise they pass the running
+	// guard, send to a dead stdin, and block until their own timeout. Then
+	// unblock any already-in-flight waiters. LIFO: setRunning(false) runs first.
 	defer c.drainPending()
+	defer c.setRunning(false)
 
 	reader := bufio.NewReader(c.stdout)
 
@@ -380,13 +385,19 @@ func (c *Client) drainPending() {
 	defer c.mu.Unlock()
 
 	for id, ch := range c.pending {
-		ch <- &Response{
+		// Non-blocking, matching the dispatch path: the channel is buffered(1)
+		// and read once, but a duplicate-id race could have already filled it —
+		// never block here while holding c.mu.
+		select {
+		case ch <- &Response{
 			JSONRPC: "2.0",
 			ID:      id,
 			Error: &ResponseError{
 				Code:    -32603, // InternalError
 				Message: "LSP client readLoop terminated",
 			},
+		}:
+		default:
 		}
 		delete(c.pending, id)
 	}
@@ -397,4 +408,11 @@ func (c *Client) IsRunning() bool {
 	c.runningMu.RLock()
 	defer c.runningMu.RUnlock()
 	return c.running
+}
+
+// setRunning sets the running flag under its lock.
+func (c *Client) setRunning(v bool) {
+	c.runningMu.Lock()
+	c.running = v
+	c.runningMu.Unlock()
 }

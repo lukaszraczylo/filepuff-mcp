@@ -128,7 +128,11 @@ func (m *Manager) GetServer(ctx context.Context, lang protocol.Language) (*Manag
 	srv, exists := m.servers[lang]
 	m.mu.RUnlock()
 
-	if exists && srv.ready {
+	// A cached server is only reusable if it is both initialized and still
+	// running — a crashed language server stays in the map with ready==true, so
+	// without the liveness check every later call would be routed to a dead
+	// process and block until timeout.
+	if exists && srv.ready && srv.client.IsRunning() {
 		// Update lastUsed with server's own lock to avoid race condition
 		srv.mu.Lock()
 		srv.lastUsed = time.Now()
@@ -141,11 +145,19 @@ func (m *Manager) GetServer(ctx context.Context, lang protocol.Language) (*Manag
 	defer m.mu.Unlock()
 
 	// Double-check after acquiring write lock
-	if srv, ok := m.servers[lang]; ok && srv.ready {
+	if srv, ok := m.servers[lang]; ok && srv.ready && srv.client.IsRunning() {
 		srv.mu.Lock()
 		srv.lastUsed = time.Now()
 		srv.mu.Unlock()
 		return srv, nil
+	}
+
+	// Evict a stale entry (crashed or never-ready) before spawning a replacement.
+	// Its process has already exited, so close it asynchronously to avoid holding
+	// m.mu on the (fast) cmd.Wait().
+	if stale, ok := m.servers[lang]; ok {
+		delete(m.servers, lang)
+		go func() { _ = stale.client.Close() }()
 	}
 
 	// Check if server config exists
