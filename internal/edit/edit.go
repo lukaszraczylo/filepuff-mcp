@@ -881,14 +881,3 @@ func truncateString(s string, maxLen int) string {
 	}
 	return s[:util.RuneBoundary(s, maxLen-3)] + "..."
 }
-
-// ValidateLanguage checks if AST editing is supported for a file.
-// Returns nil for supported languages, error for unsupported.
-// Note: Text-based editing is always available regardless of this check.
-func ValidateLanguage(filename string) error {
-	lang := protocol.DetectLanguage(filename)
-	if lang == protocol.LangUnknown {
-		return fmt.Errorf("unsupported file type for AST editing: %s (text-based editing is available)", filename)
-	}
-	return nil
-}

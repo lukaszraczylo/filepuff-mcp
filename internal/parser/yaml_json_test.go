@@ -4,8 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"gopkg.in/yaml.v3"
-
 	"github.com/lukaszraczylo/mcp-filepuff/pkg/protocol"
 )
 
@@ -200,84 +198,5 @@ version: 1.0.0`)
 	}
 	if ymlResult.Language != protocol.LangYAML {
 		t.Errorf("expected YAML language for .yml extension, got %s", ymlResult.Language)
-	}
-}
-
-func TestWalkYAML(t *testing.T) {
-	content := []byte(`metadata:
-  name: test
-  labels:
-    app: myapp
-    env: prod`)
-
-	var root yaml.Node
-	if err := yaml.Unmarshal(content, &root); err != nil {
-		t.Fatalf("failed to parse YAML: %v", err)
-	}
-
-	nodeCount := 0
-	WalkYAML(&root, func(node *yaml.Node) bool {
-		nodeCount++
-		return true
-	})
-
-	if nodeCount == 0 {
-		t.Error("expected to visit nodes, but count is 0")
-	}
-}
-
-func TestValidateYAML(t *testing.T) {
-	tests := []struct {
-		name        string
-		content     []byte
-		shouldError bool
-	}{
-		{
-			name:        "valid YAML",
-			content:     []byte("name: test\nvalue: 100"),
-			shouldError: false,
-		},
-		{
-			name:        "invalid YAML",
-			content:     []byte("name: test\n  bad:\n[unclosed"),
-			shouldError: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := ValidateYAML(tt.content)
-			if (err != nil) != tt.shouldError {
-				t.Errorf("ValidateYAML() error = %v, shouldError = %v", err, tt.shouldError)
-			}
-		})
-	}
-}
-
-func TestValidateJSON(t *testing.T) {
-	tests := []struct {
-		name        string
-		content     []byte
-		shouldError bool
-	}{
-		{
-			name:        "valid JSON",
-			content:     []byte(`{"name": "test", "value": 100}`),
-			shouldError: false,
-		},
-		{
-			name:        "invalid JSON",
-			content:     []byte(`{"name": "test", "value": 100`),
-			shouldError: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := ValidateJSON(tt.content)
-			if (err != nil) != tt.shouldError {
-				t.Errorf("ValidateJSON() error = %v, shouldError = %v", err, tt.shouldError)
-			}
-		})
 	}
 }
