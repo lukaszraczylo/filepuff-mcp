@@ -16,6 +16,14 @@ func FindNodeAtPosition(tree *sitter.Tree, line, col int) *sitter.Node {
 		return nil
 	}
 
+	// Positions are 1-indexed; reject non-positive values so the uint32
+	// conversion below can't underflow to a huge Row/Column (line/col == 0
+	// would wrap to 4294967295). Reachable from the LSP-down AST fallback with
+	// caller-supplied coordinates.
+	if line < 1 || col < 1 {
+		return nil
+	}
+
 	// Convert to 0-indexed
 	point := sitter.Point{
 		Row:    uint32(line - 1), // #nosec G115 - line numbers are bounded by file size
