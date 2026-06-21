@@ -263,15 +263,7 @@ func (s *Server) generateASTSummary(ctx context.Context, path string, content []
 
 	var sb strings.Builder
 
-	// Get relative path
-	relPath := path
-	if absPath, err := filepath.Abs(path); err == nil {
-		if rel, err := filepath.Rel(s.cfg.WorkspaceRoot, absPath); err == nil && !strings.HasPrefix(rel, "..") {
-			relPath = rel
-		}
-	}
-
-	fmt.Fprintf(&sb, "**%s** (%d lines, %s)\n\n", relPath, countLines(content), lang)
+	fmt.Fprintf(&sb, "**%s** (%d lines, %s)\n\n", s.relPath(path), countLines(content), lang)
 	sb.WriteString("Symbols:\n")
 
 	for _, sym := range symbols {
@@ -280,6 +272,18 @@ func (s *Server) generateASTSummary(ctx context.Context, path string, content []
 	}
 
 	return sb.String()
+}
+
+// relPath renders path relative to the workspace root for display, saving the
+// tokens an absolute path would cost. Falls back to the original path when it
+// can't be relativized (outside the root, or on error).
+func (s *Server) relPath(path string) string {
+	if absPath, err := filepath.Abs(path); err == nil {
+		if rel, err := filepath.Rel(s.cfg.WorkspaceRoot, absPath); err == nil && !strings.HasPrefix(rel, "..") {
+			return rel
+		}
+	}
+	return path
 }
 
 // symbolKindIcon returns an icon/prefix for a symbol kind.

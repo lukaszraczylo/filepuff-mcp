@@ -213,6 +213,20 @@ func TestASTQuerySkipsDependencyDirs(t *testing.T) {
 	}
 }
 
+// TestRelPath verifies workspace-relative display paths (token saving) with a
+// safe fallback to the original path for anything outside the root.
+func TestRelPath(t *testing.T) {
+	srv, tmpDir := newFeaturesServer(t)
+	if got := srv.relPath(filepath.Join(tmpDir, "pkg", "a.go")); got != filepath.Join("pkg", "a.go") {
+		t.Errorf("in-workspace path should be relativized, got %q", got)
+	}
+	// Outside the workspace root → returned unchanged (never a ../ escape string).
+	outside := "/definitely/outside/x.go"
+	if got := srv.relPath(outside); got != outside {
+		t.Errorf("out-of-workspace path should be returned as-is, got %q", got)
+	}
+}
+
 // ---- Feature 3 (ast_query): pagination cursor ----
 
 // TestASTQueryFirstPageCursor is a strict regression guard: page 1 must emit a

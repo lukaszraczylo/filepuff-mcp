@@ -181,7 +181,7 @@ func (s *Server) lspDefinition(ctx context.Context, file string, line, col int, 
 
 	for _, loc := range locations {
 		filePath := lsp.URIToFile(loc.URI)
-		fmt.Fprintf(&output, "**%s:%d:%d**\n", filePath, loc.Range.Start.Line+1, loc.Range.Start.Character+1)
+		fmt.Fprintf(&output, "**%s:%d:%d**\n", s.relPath(filePath), loc.Range.Start.Line+1, loc.Range.Start.Character+1)
 
 		preview := s.readFilePreview(filePath, loc.Range.Start.Line+1, 3)
 		if preview != "" {
@@ -210,7 +210,9 @@ func (s *Server) lspReferences(ctx context.Context, file string, line, col int, 
 	fileGroups := make(map[string][]lsp.Location)
 	fileOrder := make([]string, 0)
 	for _, loc := range locations {
-		filePath := lsp.URIToFile(loc.URI)
+		// Relativize for display; references are not re-read so the absolute
+		// path isn't needed downstream.
+		filePath := s.relPath(lsp.URIToFile(loc.URI))
 		if _, seen := fileGroups[filePath]; !seen {
 			fileOrder = append(fileOrder, filePath)
 		}
