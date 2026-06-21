@@ -258,6 +258,17 @@ func (s *Searcher) validatePaths(paths []string) error {
 		WithRemediation("Provide paths within the workspace root")
 }
 
+// resultPathAllowed reports whether a ripgrep result path is within the
+// workspace root. ripgrep runs with Dir=WorkspaceRoot and emits paths relative
+// to it, so a relative path is joined to the root before the check; IsPathAllowed
+// then resolves symlinks, rejecting any path that --follow led outside the root.
+func (s *Searcher) resultPathAllowed(p string) bool {
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(s.cfg.WorkspaceRoot, p)
+	}
+	return s.cfg.IsPathAllowed(p)
+}
+
 // parseOutput parses ripgrep JSON output.
 func (s *Searcher) parseOutput(output *bytes.Buffer, maxResults int) (*SearchResults, error) {
 	results := &SearchResults{
@@ -285,6 +296,14 @@ func (s *Searcher) parseOutput(output *bytes.Buffer, maxResults int) (*SearchRes
 		case "match":
 			var match rgMatch
 			if err := json.Unmarshal(msg.Data, &match); err != nil {
+				continue
+			}
+
+			// Defense in depth: never surface a file outside the workspace root.
+			// ripgrep with --follow (default on) can traverse a symlink whose
+			// target lives outside the root; dropping those matches keeps search
+			// from leaking external file content.
+			if !s.resultPathAllowed(match.Path.Text) {
 				continue
 			}
 

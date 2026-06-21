@@ -402,3 +402,45 @@ func TestSearchEmptyPattern(t *testing.T) {
 		t.Error("expected error for empty pattern")
 	}
 }
+
+// TestSearchSymlinkEscapeNotLeaked is a security regression guard: with
+// FollowSymlinks on (the default), ripgrep can traverse a symlink whose target
+// is outside the workspace root. Such matches must never be returned — search
+// must not leak the content of files outside the workspace.
+func TestSearchSymlinkEscapeNotLeaked(t *testing.T) {
+	const secret = "SUPERSECRETLEAKCANARY"
+
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte(secret+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	workspace := t.TempDir()
+	// A regular in-workspace file that does NOT contain the secret.
+	if err := os.WriteFile(filepath.Join(workspace, "ok.txt"), []byte("nothing here\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A symlink inside the workspace pointing at the outside directory.
+	if err := os.Symlink(outside, filepath.Join(workspace, "escape")); err != nil {
+		t.Skipf("symlinks unsupported: %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.WorkspaceRoot = workspace
+	if !cfg.FollowSymlinks {
+		t.Fatal("precondition: FollowSymlinks should default true so rg --follow is exercised")
+	}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	s, err := New(cfg, logger)
+	if err != nil {
+		t.Skip("ripgrep not installed")
+	}
+
+	results, err := s.Search(context.Background(), &Request{Pattern: secret})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	for _, r := range results.Results {
+		t.Errorf("symlink escape leaked an out-of-workspace match: file=%q text=%q", r.File, r.MatchText)
+	}
+}
