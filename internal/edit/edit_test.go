@@ -1818,3 +1818,80 @@ func TestRegressionLineMergeDelete(t *testing.T) {
 		})
 	}
 }
+
+// TestFindExactTextIndexAndOverlap pins selector_index resolution for literal
+// text matches, including overlapping matches and the out-of-range guard — the
+// range these return is the span that gets mutated, so wrong indices = wrong-
+// location writes.
+func TestFindExactTextIndexAndOverlap(t *testing.T) {
+	e := NewEngine(parser.NewRegistry())
+	content := []byte("aaaa") // "aa" matches at 0,1,2 (overlapping)
+
+	for i, want := range []struct{ start, end int }{{0, 2}, {1, 3}, {2, 4}} {
+		start, end, err := e.findExactText(content, "aa", i)
+		if err != nil {
+			t.Fatalf("index %d: unexpected error: %v", i, err)
+		}
+		if start != want.start || end != want.end {
+			t.Errorf("index %d: got [%d,%d), want [%d,%d)", i, start, end, want.start, want.end)
+		}
+	}
+
+	if _, _, err := e.findExactText(content, "aa", 3); err == nil {
+		t.Error("index 3 (only 3 matches) must be out-of-range error")
+	}
+	if _, _, err := e.findExactText(content, "zz", 0); err == nil {
+		t.Error("missing text must error")
+	}
+	if _, _, err := e.findExactText(content, "", 0); err == nil {
+		t.Error("empty text selector must error")
+	}
+}
+
+// TestFindRegexPatternIndexAndError pins selector_index and error paths for regex
+// selection (non-overlapping matches via FindAllIndex).
+func TestFindRegexPatternIndexAndError(t *testing.T) {
+	e := NewEngine(parser.NewRegistry())
+	content := []byte("a1b2c3") // [0-9] matches at 1,3,5
+
+	for i, want := range []struct{ start, end int }{{1, 2}, {3, 4}, {5, 6}} {
+		start, end, err := e.findRegexPattern(content, "[0-9]", i)
+		if err != nil {
+			t.Fatalf("index %d: unexpected error: %v", i, err)
+		}
+		if start != want.start || end != want.end {
+			t.Errorf("index %d: got [%d,%d), want [%d,%d)", i, start, end, want.start, want.end)
+		}
+	}
+
+	if _, _, err := e.findRegexPattern(content, "[0-9]", 3); err == nil {
+		t.Error("index 3 (only 3 matches) must be out-of-range error")
+	}
+	if _, _, err := e.findRegexPattern(content, "zzz", 0); err == nil {
+		t.Error("non-matching pattern must error")
+	}
+	if _, _, err := e.findRegexPattern(content, "[unclosed", 0); err == nil {
+		t.Error("invalid regex must error")
+	}
+}
+
+// TestSpliceContentCRLFNoBareLF verifies the CRLF pullback: when an edit range
+// ends between the \r and \n of a terminator, the \r\n must stay intact in the
+// tail rather than being split into a bare LF (which would corrupt the file's
+// line-ending convention).
+func TestSpliceContentCRLFNoBareLF(t *testing.T) {
+	// Replace [0,4) which ends on the \n of "foo\r\n" (index 4, preceded by \r@3).
+	got, err := spliceContent(EditReplace, []byte("foo\r\nbar\r\n"), 0, 4, "X", "\r\n")
+	if err != nil {
+		t.Fatalf("splice: %v", err)
+	}
+	if string(got) != "X\r\nbar\r\n" {
+		t.Fatalf("pullback failed: got %q, want %q", got, "X\r\nbar\r\n")
+	}
+	// No \n may appear without a preceding \r.
+	for i, b := range got {
+		if b == '\n' && (i == 0 || got[i-1] != '\r') {
+			t.Errorf("bare LF at index %d in %q", i, got)
+		}
+	}
+}
