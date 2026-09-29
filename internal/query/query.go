@@ -509,11 +509,15 @@ func formatResults(results []MatchResult, maxResults int, format string, offset 
 	case "compact":
 		for i := 0; i < renderCount; i++ {
 			r := results[i]
+			firstLine := firstLineOf(r.Text, 80)
+			if !verbose {
+				fmt.Fprintf(&sb, "%s:%d %s\n", r.File, r.Location.Line, firstLine)
+				continue
+			}
 			nodeType := "unknown"
 			if r.Node != nil {
 				nodeType = r.Node.Type()
 			}
-			firstLine := firstLineOf(r.Text, 80)
 			fmt.Fprintf(&sb, "%s:%d (%s) %s\n", r.File, r.Location.Line, nodeType, firstLine)
 		}
 

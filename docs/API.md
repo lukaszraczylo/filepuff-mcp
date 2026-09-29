@@ -70,7 +70,7 @@ Search for text patterns in files using ripgrep. Supports regex patterns, file t
 | `file_types` | `array[string]` | No | File types to search (e.g., ['go', 'ts', 'py']) |
 | `ignore_case` | `boolean` | No | Case insensitive search |
 | `regex` | `boolean` | No | Treat pattern as regex (default: true) |
-| `context_lines` | `number` | No | Number of context lines around matches (default: 2) |
+| `context_lines` | `number` | No | Number of context lines around matches (default: 0) |
 | `max_results` | `number` | No | Maximum number of results to return |
 
 **Examples:**
@@ -153,7 +153,7 @@ Search for AST patterns in code files. Use code patterns with $VAR placeholders 
 | `name_matches` | `string` | No | Regex pattern to filter by name |
 | `name_exact` | `string` | No | Exact name to match |
 | `kind_in` | `array[string]` | No | Node types to match (e.g., function_declaration, class_declaration) |
-| `max_results` | `number` | No | Maximum number of results to return (default: 100) |
+| `max_results` | `number` | No | Maximum number of results to return (default: 50) |
 
 **Examples:**
 

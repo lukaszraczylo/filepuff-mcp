@@ -60,7 +60,7 @@ func (s *Server) resolveASTQueryParams(request mcp.CallToolRequest) (*astQueryPa
 		prefsMaxResults = sp.DefaultMaxResults
 		prefsFormat = sp.ASTQueryFormat
 	}
-	p.maxResults = effectiveInt(request, "max_results", prefsMaxResults, 100)
+	p.maxResults = effectiveInt(request, "max_results", prefsMaxResults, 50)
 
 	p.format = request.GetString("format", "")
 	if p.format == "" {

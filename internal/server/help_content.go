@@ -49,7 +49,7 @@ const helpFileSearch = "# file_search — flags and examples\n\n" +
 	"| `cluster=true` | Coalesce consecutive match lines into ranges (`L12-14│ text`). Drops context lines for density. |\n" +
 	"| `cursor` | Opaque pagination token from a previous truncated response — fetches next page. |\n" +
 	"| `max_results` | Page size for pagination. Re-run with `cursor` to get next page. |\n" +
-	"| `context_lines` | Number of context lines around matches (default: 2). |\n" +
+	"| `context_lines` | Number of context lines around matches (default: 0). |\n" +
 	"| `ignore_case` | Case-insensitive search. |\n" +
 	"| `regex` | Treat pattern as regex (default: true). |\n" +
 	"| `file_types` | Restrict to file extensions, e.g. `[\"go\", \"ts\"]`. |\n" +
@@ -77,7 +77,7 @@ const helpASTQuery = "# ast_query — flags and examples\n\n" +
 	"| `verbose=true` | Emit `Found N match(es):` preamble (v1 behaviour). Default: false. |\n" +
 	"| `format` | `compact` (default, one line per match) \\| `verbose` (full code+captures) \\| `location` (file:line only) |\n" +
 	"| `cursor` | Opaque pagination token from a previous truncated response — fetches next page. |\n" +
-	"| `max_results` | Page size (default: 100). |\n" +
+	"| `max_results` | Page size (default: 50). |\n" +
 	"| `name_exact` | Exact symbol name to match. |\n" +
 	"| `name_matches` | Regex pattern to filter by name. |\n" +
 	"| `kind_in` | Node types to match (e.g. `function_declaration`, `class_declaration`). |\n" +

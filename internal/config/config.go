@@ -33,7 +33,7 @@ const (
 	DefaultSearchTimeout              = 30 * time.Second
 	DefaultMaxFileSize                = 10 * 1024 * 1024 // 10 MB
 	DefaultMaxParseSize               = 10 * 1024 * 1024 // 10 MB
-	DefaultMaxSearchResults           = 1000
+	DefaultMaxSearchResults           = 50
 	DefaultMaxEditSize                = 100 * 1024 // 100 KB
 	DefaultResourceLinkThresholdBytes = 64 * 1024  // 64 KiB
 )

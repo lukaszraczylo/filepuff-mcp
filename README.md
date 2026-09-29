@@ -283,7 +283,7 @@ Search for text patterns in files using ripgrep.
 - `file_types`: File types to search (e.g., ["go", "ts", "py"])
 - `ignore_case`: Case insensitive search
 - `regex`: Treat pattern as regex (default: true)
-- `context_lines`: Number of context lines around matches (default: 2)
+- `context_lines`: Number of context lines around matches (default: 0)
 - `max_results`: Maximum number of results to return
 
 ---
@@ -352,7 +352,7 @@ Search for AST patterns in code files using structural pattern matching.
 - `name_matches`: Regex pattern to filter by name
 - `name_exact`: Exact name to match
 - `kind_in`: Node types to match (e.g., function_declaration)
-- `max_results`: Maximum number of results (default: 100)
+- `max_results`: Maximum number of results (default: 50)
 
 **Examples**:
 ```json

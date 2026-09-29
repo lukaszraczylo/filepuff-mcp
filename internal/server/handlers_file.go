@@ -51,7 +51,7 @@ func (s *Server) handleFileSearch(ctx context.Context, request mcp.CallToolReque
 	fileTypes := request.GetStringSlice("file_types", nil)
 	ignoreCase := request.GetBool("ignore_case", false)
 	regex := request.GetBool("regex", true)
-	contextLines := request.GetInt("context_lines", 2)
+	contextLines := request.GetInt("context_lines", 0)
 
 	// Consult session prefs for max_results and cluster when not explicitly supplied.
 	prefs := s.sessionPrefs.Load()
