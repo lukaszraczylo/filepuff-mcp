@@ -2,7 +2,7 @@ version: "2"
 
 run:
   timeout: 5m
-  go: '1.25'
+  go: '1.26'
 
 linters:
   enable:
@@ -13,32 +13,26 @@ linters:
     - unused        # Check for unused code
     - gocyclo       # Check cyclomatic complexity
     - misspell      # Check for misspelled words
+  settings:
+    staticcheck:
+      checks: ["all"]
+  exclusions:
+    rules:
+      # Exclude some linters from running on tests
+      - path: _test\.go
+        linters:
+          - gocyclo
+          - errcheck
+          - gosec
 
 formatters:
   enable:
     - gofmt         # Check formatting
 
-linters-settings:
-  gocyclo:
-    min-complexity: 15
-  errcheck:
-    check-blank: true
-  govet:
-    enable-all: true
-  staticcheck:
-    checks: ["all"]
-
 issues:
-  exclude-rules:
-    # Exclude some linters from running on tests
-    - path: _test\.go
-      linters:
-        - gocyclo
-        - errcheck
-        - gosec
-
   max-issues-per-linter: 0
   max-same-issues: 0
 
 output:
-  sort-results: true
+  sort-order:
+    - file
