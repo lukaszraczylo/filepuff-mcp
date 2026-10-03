@@ -95,6 +95,24 @@ release:
     ```
 
 
+homebrew_casks:
+  - name: mcp-filepuff
+    repository:
+      owner: lukaszraczylo
+      name: homebrew-taps
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Casks
+    homepage: https://github.com/lukaszraczylo/filepuff-mcp
+    description: "AST-aware file operations and LSP integration MCP server for Claude Code"
+    license: MIT
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr",
+                           args: ["-dr", "com.apple.quarantine", "#{staged_path}/mcp-filepuff"]
+          end
+
 dockers:
   - image_templates:
       - "ghcr.io/lukaszraczylo/filepuff-mcp:{{ .Tag }}"
